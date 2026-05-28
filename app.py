@@ -1,39 +1,29 @@
 import os, json, uuid, threading, subprocess
-from flask import Flask, request, jsonify
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from flask import Flask, request, jsonify, send_file
 
 app = Flask(__name__)
 
-# ── Load service account from env var ──────────────────────────────────────
-SA_JSON = os.environ.get("SERVICE_ACCOUNT_JSON")
-SCOPES  = ["https://www.googleapis.com/auth/drive"]
-
-def get_drive_service():
-    info  = json.loads(SA_JSON)
-    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-    return build("drive", "v3", credentials=creds)
+API_SECRET = os.environ.get("API_SECRET")
 
 # ── In-memory job store ────────────────────────────────────────────────────
-jobs = {}   # job_id → { status, message, files }
+jobs = {}  # job_id → { status, message, file_path }
 
-def update_job(job_id, status, message, files=None):
-    jobs[job_id] = {"status": status, "message": message, "files": files or []}
+def update_job(job_id, status, message, file_path=None):
+    jobs[job_id] = {"status": status, "message": message, "file_path": file_path}
 
-# ── Background download + upload ───────────────────────────────────────────
-def run_download(job_id, url, folder_id, cookies_file_id):
+# ── Background download ────────────────────────────────────────────────────
+def run_download(job_id, url, cookies_content):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
         os.makedirs(work_dir, exist_ok=True)
 
         cookies_path = None
-        if cookies_file_id:
+        if cookies_content:
             cookies_path = f"{work_dir}/cookies.txt"
-            download_from_drive(cookies_file_id, cookies_path)
+            with open(cookies_path, "w") as f:
+                f.write(cookies_content)
 
-        # Build yt-dlp command
         cmd = [
             "yt-dlp",
             "--no-warnings",
@@ -42,8 +32,6 @@ def run_download(job_id, url, folder_id, cookies_file_id):
         ]
         if cookies_path:
             cmd += ["--cookies", cookies_path]
-
-        # m3u8 direct link handling
         if ".m3u8" in url:
             cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
 
@@ -52,37 +40,22 @@ def run_download(job_id, url, folder_id, cookies_file_id):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
 
         if result.returncode != 0:
-            update_job(job_id, "error", f"yt-dlp error:\n{result.stderr[-1000:]}")
+            update_job(job_id, "error", f"yt-dlp error: {result.stderr[-800:]}")
             return
 
-        # Upload all mp4 files to Drive
-        drive = get_drive_service()
-        uploaded = []
+        # Find the downloaded file
         for fname in os.listdir(work_dir):
             if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
                 fpath = os.path.join(work_dir, fname)
-                file_meta = {"name": fname, "parents": [folder_id]}
-                media = MediaFileUpload(fpath, resumable=True)
-                f = drive.files().create(body=file_meta, media_body=media, fields="id,name,webViewLink").execute()
-                uploaded.append({"name": f["name"], "link": f["webViewLink"]})
-                os.remove(fpath)
+                update_job(job_id, "done", f"✅ Ready: {fname}", fpath)
+                return
 
-        if uploaded:
-            update_job(job_id, "done", f"✅ Uploaded {len(uploaded)} file(s) to Drive.", uploaded)
-        else:
-            update_job(job_id, "error", "Download finished but no video files found.")
+        update_job(job_id, "error", "Download finished but no video file found.")
 
     except subprocess.TimeoutExpired:
-        update_job(job_id, "error", "❌ Timeout: video took too long to download.")
+        update_job(job_id, "error", "❌ Timeout: video took too long.")
     except Exception as e:
         update_job(job_id, "error", f"❌ Unexpected error: {str(e)}")
-
-def download_from_drive(file_id, dest_path):
-    """Download a file from Drive by ID (used for cookies.txt)."""
-    drive = get_drive_service()
-    request = drive.files().get_media(fileId=file_id)
-    with open(dest_path, "wb") as f:
-        f.write(request.execute())
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
@@ -91,20 +64,19 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def start_download():
-    data      = request.get_json()
-    url       = data.get("url", "").strip()
-    folder_id = data.get("folder_id", "").strip()
-    cookies   = data.get("cookies_file_id", "").strip()  # optional
-    secret    = data.get("secret", "")
+    data    = request.get_json()
+    url     = data.get("url", "").strip()
+    cookies = data.get("cookies_content", "").strip()
+    secret  = data.get("secret", "")
 
-    if secret != os.environ.get("API_SECRET"):
+    if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
-    if not url or not folder_id:
-        return jsonify({"error": "url and folder_id are required"}), 400
+    if not url:
+        return jsonify({"error": "url is required"}), 400
 
     job_id = str(uuid.uuid4())
     update_job(job_id, "queued", "Job queued…")
-    threading.Thread(target=run_download, args=(job_id, url, folder_id, cookies), daemon=True).start()
+    threading.Thread(target=run_download, args=(job_id, url, cookies), daemon=True).start()
     return jsonify({"job_id": job_id}), 202
 
 @app.route("/status/<job_id>", methods=["GET"])
@@ -112,7 +84,20 @@ def job_status(job_id):
     job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify(job)
+    # Don't expose file_path to client
+    return jsonify({"status": job["status"], "message": job["message"]})
+
+@app.route("/result/<job_id>", methods=["GET"])
+def get_result(job_id):
+    secret = request.args.get("secret", "")
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
+    fpath = job["file_path"]
+    fname = os.path.basename(fpath)
+    return send_file(fpath, as_attachment=True, download_name=fname)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
