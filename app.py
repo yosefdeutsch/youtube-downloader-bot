@@ -134,19 +134,28 @@ def get_result(job_id):
 
 @app.route("/formats", methods=["POST"])
 def check_formats():
-    data   = request.get_json()
-    secret = data.get("secret", "")
-    url    = data.get("url", "")
+    data          = request.get_json()
+    secret        = data.get("secret", "")
+    url           = data.get("url", "")
+    cookies_content = data.get("cookies_content", "")
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
 
     proxy = os.environ.get("PROXY_URL", "")
-    cmd = [
-        "yt-dlp",
-        "--list-formats",
-        "--proxy", proxy,
-        url
-    ]
+    work_dir = f"/tmp/formats_check"
+    os.makedirs(work_dir, exist_ok=True)
+
+    cookies_path = None
+    if cookies_content:
+        cookies_path = f"{work_dir}/cookies.txt"
+        with open(cookies_path, "w") as f:
+            f.write(cookies_content)
+
+    cmd = ["yt-dlp", "--list-formats", "--proxy", proxy]
+    if cookies_path:
+        cmd += ["--cookies", cookies_path]
+    cmd.append(url)
+
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({
         "stdout": result.stdout[-3000:],
