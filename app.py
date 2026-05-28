@@ -12,13 +12,13 @@ def update_job(job_id, status, message, file_paths=None):
 
 def quality_to_format(quality):
     mapping = {
-        "best": "best",
-        "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "720":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "480":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-        "360":  "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+        "best": "137+140/96+140/18",      # 1080p video + audio / fallback
+        "1080": "137+140/96+140/18",
+        "720":  "136+140/95+140/18",
+        "480":  "135+140/94+140/18",
+        "360":  "18/93+140/134+140",
     }
-    return mapping.get(quality, "best")
+    return mapping.get(quality, "18")
 
 def split_video_file(input_path, work_dir, part_size_mb=45):
     part_size_bytes = part_size_mb * 1024 * 1024
@@ -58,14 +58,17 @@ def run_download(job_id, url, cookies_content, quality, do_split):
 
         if is_youtube:
             strategies = [
-                ["--extractor-args", "youtube:player_client=mweb",
-                 "--format", "best[ext=mp4]/best", "--proxy", PROXY_URL],
+                # Strategy 1: exact format IDs (most reliable)
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", fmt, "--proxy", PROXY_URL],
+                # Strategy 2: mweb with simple best
                 ["--extractor-args", "youtube:player_client=mweb",
-                 "--format", "best", "--proxy", PROXY_URL],
+                 "--format", "best[ext=mp4]/best", "--proxy", PROXY_URL],
+                # Strategy 3: format 18 (360p, always works, video+audio combined)
                 ["--extractor-args", "youtube:player_client=tv_embedded",
-                 "--format", "best", "--proxy", PROXY_URL],
+                 "--format", "18", "--proxy", PROXY_URL],
+                # Strategy 4: absolute fallback
+                ["--format", "best", "--proxy", PROXY_URL],
             ]
         else:
             strategies = [
