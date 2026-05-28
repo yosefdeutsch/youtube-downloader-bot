@@ -1,4 +1,5 @@
 import os, json, uuid, threading, subprocess
+import zipfile
 from flask import Flask, request, jsonify, send_file
 
 app = Flask(__name__)
@@ -220,7 +221,29 @@ def check_formats():
     cmd.append(url)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({"stdout": result.stdout[-3000:], "stderr": result.stderr[-1000:]})
+@app.route("/result_zip/<job_id>")
+def result_zip(job_id):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
 
+    file_paths = job["file_paths"]
+
+    # If only one file, just send it directly
+    if len(file_paths) == 1:
+        fpath = file_paths[0]
+        return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+
+    # Multiple files — zip them
+    zip_path = f"/tmp/{job_id}/parts.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for fpath in file_paths:
+            zf.write(fpath, os.path.basename(fpath))
+
+    return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
