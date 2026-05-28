@@ -132,6 +132,27 @@ def get_result(job_id):
     fname = os.path.basename(fpath)
     return send_file(fpath, as_attachment=True, download_name=fname)
 
+@app.route("/formats", methods=["POST"])
+def check_formats():
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    url    = data.get("url", "")
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    proxy = os.environ.get("PROXY_URL", "")
+    cmd = [
+        "yt-dlp",
+        "--list-formats",
+        "--proxy", proxy,
+        url
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return jsonify({
+        "stdout": result.stdout[-3000:],
+        "stderr": result.stderr[-1000:]
+    })
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
