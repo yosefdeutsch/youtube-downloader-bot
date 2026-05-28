@@ -61,9 +61,9 @@ def run_download(job_id, url, cookies_content):
                 "yt-dlp",
                 "--no-warnings",
                 "--merge-output-format", "mp4",
+                "--remote-components", "ejs:github",
                 "--output", f"{work_dir}/%(title)s.%(ext)s",
             ] + extra_args
-
             if cookies_path:
                 cmd += ["--cookies", cookies_path]
             if is_m3u8:
@@ -151,7 +151,7 @@ def check_formats():
         with open(cookies_path, "w") as f:
             f.write(cookies_content)
 
-    cmd = ["yt-dlp", "--list-formats", "--proxy", proxy]
+    cmd = ["yt-dlp", "--list-formats", "--proxy", proxy, "--remote-components", "ejs:github"]
     if cookies_path:
         cmd += ["--cookies", cookies_path]
     cmd.append(url)
