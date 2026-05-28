@@ -89,7 +89,8 @@ def run_download(job_id, url, cookies_content, quality, do_split):
                 "--no-warnings",
                 "--merge-output-format", "mp4",
                 "--remote-components", "ejs:github",
-                "--output", f"{work_dir}/%(title)s.%(ext)s",
+                "--output", f"{work_dir}/%(title).100B.%(ext)s",
+                "--restrict-filenames",
             ] + extra_args
 
             if cookies_path:
