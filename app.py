@@ -32,17 +32,20 @@ def run_download(job_id, url, cookies_content):
 
         if is_youtube:
             strategies = [
-                # Strategy 1: mweb client
+                # Strategy 1: mweb + proxy
                 ["--extractor-args", "youtube:player_client=mweb",
-                 "--format", "best[ext=mp4]/best"],
-                # Strategy 2: tv_embedded no format restriction
+                 "--format", "best[ext=mp4]/best",
+                 "--proxy", os.environ.get("PROXY_URL", "")],
+                # Strategy 2: tv_embedded + proxy
                 ["--extractor-args", "youtube:player_client=tv_embedded",
-                 "--format", "best"],
-                # Strategy 3: android with cookies
+                 "--format", "best",
+                 "--proxy", os.environ.get("PROXY_URL", "")],
+                # Strategy 3: android + proxy
                 ["--extractor-args", "youtube:player_client=android",
-                 "--format", "best[ext=mp4]/best"],
-                # Strategy 4: web with skip
-                ["--extractor-args", "youtube:player_client=web,player_skip=webpage",
+                 "--format", "best[ext=mp4]/best",
+                 "--proxy", os.environ.get("PROXY_URL", "")],
+                # Strategy 4: mweb no proxy fallback
+                ["--extractor-args", "youtube:player_client=mweb",
                  "--format", "best"],
             ]
         else:
