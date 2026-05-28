@@ -28,6 +28,9 @@ def run_download(job_id, url, cookies_content):
             "yt-dlp",
             "--no-warnings",
             "--merge-output-format", "mp4",
+            "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+            "--extractor-args", "youtube:player_client=android",
+            "--add-header", "User-Agent:Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36",
             "--output", f"{work_dir}/%(title)s.%(ext)s",
         ]
         if cookies_path:
