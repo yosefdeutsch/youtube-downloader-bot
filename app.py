@@ -14,6 +14,8 @@ def update_job(job_id, status, message, file_path=None):
 # ── Background download ────────────────────────────────────────────────────
 def run_download(job_id, url, cookies_content):
     try:
+        update_job(job_id, "running", "Updating yt-dlp…")
+        subprocess.run(["pip", "install", "--upgrade", "yt-dlp"], capture_output=True)
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
         os.makedirs(work_dir, exist_ok=True)
