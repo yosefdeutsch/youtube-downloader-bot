@@ -232,28 +232,49 @@ def result_zip(job_id):
 
     work_dir = f"/tmp/{job_id}"
 
-    # Scan folder for actual files instead of trusting stored paths
+    # Scan folder for actual files
     actual_files = sorted([
         os.path.join(work_dir, f)
         for f in os.listdir(work_dir)
         if f.endswith((".mp4", ".mkv", ".webm"))
         and not f.startswith("cookies")
+        and "_part" not in f
     ])
 
     if not actual_files:
+        # Maybe parts already exist from a previous split
+        part_files = sorted([
+            os.path.join(work_dir, f)
+            for f in os.listdir(work_dir)
+            if "_part" in f and f.endswith(".mp4")
+        ])
+        if part_files:
+            zip_path = os.path.join(work_dir, "parts.zip")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                for fpath in part_files:
+                    zf.write(fpath, os.path.basename(fpath))
+            return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
         return jsonify({"error": "No files found on disk"}), 404
 
-    if len(actual_files) == 1:
-        fpath = actual_files[0]
-        return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+    fpath     = actual_files[0]
+    file_size = os.path.getsize(fpath)
 
-    # Multiple files — zip them
-    zip_path = os.path.join(work_dir, "parts.zip")
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        for fpath in actual_files:
-            zf.write(fpath, os.path.basename(fpath))
+    # Always split if file is over 45MB regardless of user choice
+    if file_size > 45 * 1024 * 1024:
+        parts = split_video_file(fpath, work_dir)
+        os.remove(fpath)
 
-    return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
+        if not parts:
+            return jsonify({"error": "Split failed"}), 500
+
+        zip_path = os.path.join(work_dir, "parts.zip")
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            for p in parts:
+                zf.write(p, os.path.basename(p))
+        return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
+
+    # File is small enough — send directly
+    return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
