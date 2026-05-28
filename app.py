@@ -60,6 +60,8 @@ def run_download(job_id, url, cookies_content, quality, do_split):
             strategies = [
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", fmt, "--proxy", PROXY_URL],
+                ["--extractor-args", "youtube:player_client=mweb",
+                 "--format", "best[ext=mp4]/best", "--proxy", PROXY_URL],
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", "best", "--proxy", PROXY_URL],
                 ["--extractor-args", "youtube:player_client=tv_embedded",
