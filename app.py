@@ -14,7 +14,6 @@ def update_job(job_id, status, message, file_path=None):
 # ── Background download ────────────────────────────────────────────────────
 def run_download(job_id, url, cookies_content):
     try:
-        update_job(job_id, "running", "Updating yt-dlp…")
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
         os.makedirs(work_dir, exist_ok=True)
@@ -25,35 +24,63 @@ def run_download(job_id, url, cookies_content):
             with open(cookies_path, "w") as f:
                 f.write(cookies_content)
 
-        cmd = [
-            "yt-dlp",
-            "--no-warnings",
-            "--merge-output-format", "mp4",
-            "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-            "--extractor-args", "youtube:player_client=tv_embedded",
-            "--output", f"{work_dir}/%(title)s.%(ext)s",
-        ]
-        if cookies_path:
-            cmd += ["--cookies", cookies_path]
-        if ".m3u8" in url:
-            cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
+        is_youtube = "youtube.com" in url or "youtu.be" in url
+        is_m3u8    = ".m3u8" in url
 
-        cmd.append(url)
+        # Try multiple strategies in order
+        strategies = []
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
+        if is_youtube:
+            strategies = [
+                # Strategy 1: mweb client
+                ["--extractor-args", "youtube:player_client=mweb",
+                 "--format", "best[ext=mp4]/best"],
+                # Strategy 2: tv_embedded no format restriction
+                ["--extractor-args", "youtube:player_client=tv_embedded",
+                 "--format", "best"],
+                # Strategy 3: android with cookies
+                ["--extractor-args", "youtube:player_client=android",
+                 "--format", "best[ext=mp4]/best"],
+                # Strategy 4: web with skip
+                ["--extractor-args", "youtube:player_client=web,player_skip=webpage",
+                 "--format", "best"],
+            ]
+        else:
+            strategies = [
+                ["--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"],
+            ]
 
-        if result.returncode != 0:
-            update_job(job_id, "error", f"yt-dlp error: {result.stderr[-800:]}")
-            return
+        last_error = ""
+        for i, extra_args in enumerate(strategies):
+            update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
 
-        # Find the downloaded file
-        for fname in os.listdir(work_dir):
-            if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
-                fpath = os.path.join(work_dir, fname)
-                update_job(job_id, "done", f"✅ Ready: {fname}", fpath)
-                return
+            cmd = [
+                "yt-dlp",
+                "--no-warnings",
+                "--merge-output-format", "mp4",
+                "--output", f"{work_dir}/%(title)s.%(ext)s",
+            ] + extra_args
 
-        update_job(job_id, "error", "Download finished but no video file found.")
+            if cookies_path:
+                cmd += ["--cookies", cookies_path]
+            if is_m3u8:
+                cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
+
+            cmd.append(url)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
+
+            if result.returncode == 0:
+                # Check if file was actually created
+                for fname in os.listdir(work_dir):
+                    if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
+                        fpath = os.path.join(work_dir, fname)
+                        update_job(job_id, "done", f"✅ Ready: {fname}", fpath)
+                        return
+
+            last_error = result.stderr[-600:] if result.stderr else "Unknown error"
+
+        update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
 
     except subprocess.TimeoutExpired:
         update_job(job_id, "error", "❌ Timeout: video took too long.")
