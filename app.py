@@ -230,17 +230,27 @@ def result_zip(job_id):
     if not job or job["status"] != "done":
         return jsonify({"error": "Not ready"}), 404
 
-    file_paths = job["file_paths"]
+    work_dir = f"/tmp/{job_id}"
 
-    # If only one file, just send it directly
-    if len(file_paths) == 1:
-        fpath = file_paths[0]
+    # Scan folder for actual files instead of trusting stored paths
+    actual_files = sorted([
+        os.path.join(work_dir, f)
+        for f in os.listdir(work_dir)
+        if f.endswith((".mp4", ".mkv", ".webm"))
+        and not f.startswith("cookies")
+    ])
+
+    if not actual_files:
+        return jsonify({"error": "No files found on disk"}), 404
+
+    if len(actual_files) == 1:
+        fpath = actual_files[0]
         return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
 
     # Multiple files — zip them
-    zip_path = f"/tmp/{job_id}/parts.zip"
+    zip_path = os.path.join(work_dir, "parts.zip")
     with zipfile.ZipFile(zip_path, "w") as zf:
-        for fpath in file_paths:
+        for fpath in actual_files:
             zf.write(fpath, os.path.basename(fpath))
 
     return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
