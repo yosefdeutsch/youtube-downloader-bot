@@ -15,7 +15,6 @@ def update_job(job_id, status, message, file_path=None):
 def run_download(job_id, url, cookies_content):
     try:
         update_job(job_id, "running", "Updating yt-dlp…")
-        subprocess.run(["pip", "install", "--upgrade", "yt-dlp"], capture_output=True)
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
         os.makedirs(work_dir, exist_ok=True)
@@ -31,8 +30,8 @@ def run_download(job_id, url, cookies_content):
             "--no-warnings",
             "--merge-output-format", "mp4",
             "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-            "--extractor-args", "youtube:player_client=ios",
-            "--add-header", "User-Agent:Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0.4472.120 Mobile Safari/537.36",
+            "--extractor-args", "youtube:player_skip=webpage,configs,js",
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             "--output", f"{work_dir}/%(title)s.%(ext)s",
         ]
         if cookies_path:
