@@ -275,6 +275,21 @@ def result_zip(job_id):
 
     # File is small enough — send directly
     return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+@app.route("/debug/<job_id>")
+def debug_job(job_id):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    work_dir = f"/tmp/{job_id}"
+    job = jobs.get(job_id)
+    try:
+        files = os.listdir(work_dir)
+    except:
+        files = ["FOLDER NOT FOUND"]
+    return jsonify({
+        "job": job,
+        "work_dir": work_dir,
+        "files_on_disk": files
+    })
     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
