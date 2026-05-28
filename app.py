@@ -30,8 +30,7 @@ def run_download(job_id, url, cookies_content):
             "--no-warnings",
             "--merge-output-format", "mp4",
             "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
-            "--extractor-args", "youtube:player_skip=webpage,configs,js",
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "--extractor-args", "youtube:player_client=tv_embedded",
             "--output", f"{work_dir}/%(title)s.%(ext)s",
         ]
         if cookies_path:
