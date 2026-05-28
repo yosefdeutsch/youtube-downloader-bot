@@ -12,13 +12,13 @@ def update_job(job_id, status, message, file_paths=None):
 
 def quality_to_format(quality):
     mapping = {
-        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "1080": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[height<=1080]",
-        "720":  "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-        "480":  "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]",
-        "360":  "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best[height<=360]",
+        "best": "best",
+        "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        "720":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        "480":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+        "360":  "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
     }
-    return mapping.get(quality, mapping["best"])
+    return mapping.get(quality, "best")
 
 def split_video_file(input_path, work_dir, part_size_mb=45):
     part_size_bytes = part_size_mb * 1024 * 1024
