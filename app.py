@@ -245,6 +245,24 @@ def check_formats():
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({"stdout": result.stdout[-3000:], "stderr": result.stderr[-1000:]})
 
+@app.route("/debug/<job_id>")
+def debug_job(job_id):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    work_dir = f"/tmp/{job_id}"
+    job = jobs.get(job_id)
+    try:
+        files = os.listdir(work_dir)
+        sizes = {f: os.path.getsize(os.path.join(work_dir, f)) for f in files}
+    except:
+        files = ["FOLDER NOT FOUND"]
+        sizes = {}
+    return jsonify({
+        "job":        job,
+        "files":      files,
+        "sizes_mb":   {k: round(v/1024/1024, 2) for k,v in sizes.items()}
+    })
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
