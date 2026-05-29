@@ -36,6 +36,7 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
         segment_duration = 600
 
     output_pattern = os.path.join(work_dir, f"{base}_part%03d.mp4")
+    # ffmpeg starts at 000, we'll rename to start at 001 after
 
     # Copy without re-encoding — no RAM spike
     cmd = [
@@ -54,7 +55,14 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
         for f in os.listdir(work_dir)
         if f.startswith(base + "_part") and f.endswith(".mp4")
     ])
-    return parts
+
+    # Rename parts to start at 001 instead of 000
+    renamed = []
+    for idx, p in enumerate(parts):
+        new_name = os.path.join(work_dir, f"{base}_part{str(idx+1).zfill(3)}.mp4")
+        os.rename(p, new_name)
+        renamed.append(new_name)
+    return renamed
 
 def run_download(job_id, url, cookies_content, format_id, custom_name):
     try:
