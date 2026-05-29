@@ -36,7 +36,6 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
         segment_duration = 600
 
     output_pattern = os.path.join(work_dir, f"{base}_part%03d.mp4")
-    # ffmpeg starts at 000, we'll rename to start at 001 after
 
     # Copy without re-encoding — no RAM spike
     cmd = [
@@ -50,18 +49,12 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     ]
     subprocess.run(cmd, capture_output=True, timeout=600)
 
-    raw_parts = sorted([
+    parts = sorted([
         os.path.join(work_dir, f)
         for f in os.listdir(work_dir)
         if f.startswith(base + "_part") and f.endswith(".mp4")
     ])
-    # Rename to start from 001 instead of 000
-    renamed = []
-    for i, fpath in enumerate(raw_parts):
-        new_name = os.path.join(work_dir, f"{base}_part{str(i+1).zfill(3)}.mp4")
-        os.rename(fpath, new_name)
-        renamed.append(new_name)
-    return renamed
+    return parts
 
 def run_download(job_id, url, cookies_content, format_id, custom_name):
     try:
@@ -245,18 +238,6 @@ def check_formats():
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({"stdout": result.stdout[-3000:], "stderr": result.stderr[-1000:]})
 
-@app.route("/parts_count/<job_id>")
-def parts_count(job_id):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    return jsonify({
-        "total": len(job.get("file_paths", [])),
-        "names": [os.path.basename(p) for p in job.get("file_paths", [])]
-    })
-    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
