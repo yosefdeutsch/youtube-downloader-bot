@@ -14,15 +14,41 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     part_size_bytes = part_size_mb * 1024 * 1024
     base            = os.path.splitext(os.path.basename(input_path))[0]
     output_pattern  = os.path.join(work_dir, f"{base}_part%03d.mp4")
+
+    # First get video duration
+    probe = subprocess.run([
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        input_path
+    ], capture_output=True, text=True)
+
+    try:
+        duration = float(probe.stdout.strip())
+    except:
+        duration = 0
+
+    file_size = os.path.getsize(input_path)
+
+    if duration > 0 and file_size > 0:
+        # Calculate segment duration proportionally
+        segment_duration = int((part_size_bytes / file_size) * duration)
+        segment_duration = max(60, segment_duration)  # minimum 60 seconds per part
+    else:
+        segment_duration = 600  # fallback: 10 min chunks
+
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-c", "copy",
+        "-c:v", "libx264",   # re-encode for proper splitting
+        "-c:a", "aac",
+        "-segment_time", str(segment_duration),
         "-f", "segment",
-        "-segment_size", str(part_size_bytes),
         "-reset_timestamps", "1",
+        "-avoid_negative_ts", "make_zero",
         output_pattern, "-y"
     ]
-    subprocess.run(cmd, capture_output=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, timeout=3600)
+
     parts = sorted([
         os.path.join(work_dir, f)
         for f in os.listdir(work_dir)
@@ -107,16 +133,21 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
             downloaded = new_path
 
         # Always split if over 40MB
-        if os.path.getsize(downloaded) > 40 * 1024 * 1024:
+        file_size = os.path.getsize(downloaded)
+        update_job(job_id, "running", f"File size: {file_size // (1024*1024)}MB. Preparing…")
+        if file_size > 40 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
-            if parts:
+            if parts and len(parts) > 0:
                 os.remove(downloaded)
                 final_files = parts
             else:
+                # Split failed, keep original
                 final_files = [downloaded]
         else:
             final_files = [downloaded]
+
+        update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
 
         update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
 
@@ -176,7 +207,13 @@ def get_part(job_id, index):
     fpath = files[index]
     if not os.path.exists(fpath):
         return jsonify({"error": "File no longer on disk"}), 404
-    return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+    fname = os.path.basename(fpath)
+    return send_file(
+        fpath,
+        as_attachment=True,
+        download_name=fname,
+        mimetype="video/mp4"
+    )
 
 @app.route("/formats", methods=["POST"])
 def check_formats():
