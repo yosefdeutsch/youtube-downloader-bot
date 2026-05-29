@@ -26,35 +26,40 @@ def get_drive_service():
     return build("drive", "v3", credentials=creds)
 
 def upload_to_drive(fpath, folder_id):
-    drive     = get_drive_service()
-    fname     = os.path.basename(fpath)
-    file_size = os.path.getsize(fpath)
-    file_meta = {"name": fname, "parents": [folder_id]}
+    info  = json.loads(SA_JSON)
+    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    drive = build("drive", "v3", credentials=creds)
 
-    # Use resumable upload for all files (handles any size)
+    fname     = os.path.basename(fpath)
+    file_meta = {
+        "name":    fname,
+        "parents": [folder_id]
+    }
+
     media = MediaFileUpload(
         fpath,
         resumable=True,
-        chunksize=10 * 1024 * 1024  # 10MB chunks
+        chunksize=5 * 1024 * 1024
     )
 
-    request = drive.files().create(
+    request  = drive.files().create(
         body=file_meta,
         media_body=media,
-        fields="id,name,webViewLink"
+        fields="id,name,webViewLink",
+        supportsAllDrives=True
     )
 
-    # Execute resumable upload chunk by chunk
     response = None
     while response is None:
         status, response = request.next_chunk()
 
     f = response
-    # Make file readable by anyone with link
     drive.permissions().create(
         fileId=f["id"],
-        body={"type": "anyone", "role": "reader"}
+        body={"type": "anyone", "role": "reader"},
+        supportsAllDrives=True
     ).execute()
+
     return f["webViewLink"]
 
 def quality_to_format(quality):
