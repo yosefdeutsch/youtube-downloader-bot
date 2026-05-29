@@ -185,7 +185,8 @@ def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name
                 link = upload_to_drive(fpath, folder_id)
                 drive_links.append({"name": os.path.basename(fpath), "link": link})
             except Exception as e:
-                update_job(job_id, "error", f"❌ Upload failed for {os.path.basename(fpath)}: {str(e)}")
+                import traceback
+                update_job(job_id, "error", f"❌ Upload failed for {os.path.basename(fpath)}: {str(e)}\n{traceback.format_exc()[-500:]}")
                 return
 
         msg = "✅ Saved to Drive!\n\n"
