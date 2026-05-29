@@ -137,8 +137,9 @@ def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
             update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
             return
 
-        # Split if needed
-        if do_split and os.path.getsize(downloaded) > 45 * 1024 * 1024:
+        # Always split if over 45MB regardless of user choice
+        file_size = os.path.getsize(downloaded)
+        if file_size > 45 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
             if parts:
