@@ -151,13 +151,12 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
                 os.remove(downloaded)
                 final_files = parts
             else:
-                # Split failed, keep original
                 final_files = [downloaded]
         else:
             final_files = [downloaded]
 
-        update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
-
+        # Verify all files actually exist before marking done
+        final_files = [f for f in final_files if os.path.exists(f)]
         update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
 
     except subprocess.TimeoutExpired:
