@@ -262,6 +262,18 @@ def debug_job(job_id):
         "files":      files,
         "sizes_mb":   {k: round(v/1024/1024, 2) for k,v in sizes.items()}
     })
+
+@app.route("/part_ready/<job_id>/<int:index>")
+def part_ready(job_id, index):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"ready": False, "status": "not_found"})
+    files = job.get("file_paths", [])
+    if index < len(files) and os.path.exists(files[index]):
+        return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
+    return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
