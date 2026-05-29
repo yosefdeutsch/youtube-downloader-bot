@@ -13,9 +13,8 @@ def update_job(job_id, status, message, file_paths=None):
 def split_video_file(input_path, work_dir, part_size_mb=40):
     part_size_bytes = part_size_mb * 1024 * 1024
     base            = os.path.splitext(os.path.basename(input_path))[0]
-    output_pattern  = os.path.join(work_dir, f"{base}_part%03d.mp4")
 
-    # First get video duration
+    # Get duration
     probe = subprocess.run([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -31,23 +30,24 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     file_size = os.path.getsize(input_path)
 
     if duration > 0 and file_size > 0:
-        # Calculate segment duration proportionally
         segment_duration = int((part_size_bytes / file_size) * duration)
-        segment_duration = max(60, segment_duration)  # minimum 60 seconds per part
+        segment_duration = max(30, segment_duration)
     else:
-        segment_duration = 600  # fallback: 10 min chunks
+        segment_duration = 600
 
+    output_pattern = os.path.join(work_dir, f"{base}_part%03d.mp4")
+
+    # Copy without re-encoding — no RAM spike
     cmd = [
         "ffmpeg", "-i", input_path,
-        "-c:v", "libx264",   # re-encode for proper splitting
-        "-c:a", "aac",
-        "-segment_time", str(segment_duration),
+        "-c", "copy",
         "-f", "segment",
+        "-segment_time", str(segment_duration),
         "-reset_timestamps", "1",
         "-avoid_negative_ts", "make_zero",
         output_pattern, "-y"
     ]
-    result = subprocess.run(cmd, capture_output=True, timeout=3600)
+    subprocess.run(cmd, capture_output=True, timeout=600)
 
     parts = sorted([
         os.path.join(work_dir, f)
@@ -72,7 +72,8 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
         is_m3u8    = ".m3u8" in url
 
         if format_id and format_id != "best":
-            fmt = format_id
+            # Always merge with best audio even when user picks specific video format
+            fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
         elif is_youtube:
             fmt = "bestvideo[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
         else:
