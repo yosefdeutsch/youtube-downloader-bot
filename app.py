@@ -1,25 +1,55 @@
-import os, json, uuid, threading, subprocess
-import zipfile
+import os, json, uuid, threading, subprocess, zipfile
 from flask import Flask, request, jsonify, send_file
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 app = Flask(__name__)
-API_SECRET = os.environ.get("API_SECRET")
-PROXY_URL  = os.environ.get("PROXY_URL", "")
+API_SECRET   = os.environ.get("API_SECRET")
+PROXY_URL    = os.environ.get("PROXY_URL", "")
+SA_JSON      = os.environ.get("SERVICE_ACCOUNT_JSON")
+SCOPES       = ["https://www.googleapis.com/auth/drive"]
 
 jobs = {}
 
-def update_job(job_id, status, message, file_paths=None):
-    jobs[job_id] = {"status": status, "message": message, "file_paths": file_paths or []}
+def update_job(job_id, status, message, file_paths=None, drive_links=None):
+    jobs[job_id] = {
+        "status":      status,
+        "message":     message,
+        "file_paths":  file_paths  or [],
+        "drive_links": drive_links or []
+    }
+
+def get_drive_service():
+    info  = json.loads(SA_JSON)
+    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    return build("drive", "v3", credentials=creds)
+
+def upload_to_drive(fpath, folder_id):
+    drive     = get_drive_service()
+    fname     = os.path.basename(fpath)
+    file_meta = {"name": fname, "parents": [folder_id]}
+    media     = MediaFileUpload(fpath, resumable=True)
+    f = drive.files().create(
+        body=file_meta, media_body=media,
+        fields="id,name,webViewLink"
+    ).execute()
+    # Make file readable by anyone with link
+    drive.permissions().create(
+        fileId=f["id"],
+        body={"type": "anyone", "role": "reader"}
+    ).execute()
+    return f["webViewLink"]
 
 def quality_to_format(quality):
     mapping = {
-        "best": "137+140/96+140/18",      # 1080p video + audio / fallback
-        "1080": "137+140/96+140/18",
-        "720":  "136+140/95+140/18",
-        "480":  "135+140/94+140/18",
-        "360":  "18/93+140/134+140",
+        "best": "best",
+        "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        "720":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        "480":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+        "360":  "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
     }
-    return mapping.get(quality, "18")
+    return mapping.get(quality, "best")
 
 def split_video_file(input_path, work_dir, part_size_mb=45):
     part_size_bytes = part_size_mb * 1024 * 1024
@@ -41,7 +71,7 @@ def split_video_file(input_path, work_dir, part_size_mb=45):
     ])
     return parts
 
-def run_download(job_id, url, cookies_content, quality, do_split):
+def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
@@ -59,17 +89,14 @@ def run_download(job_id, url, cookies_content, quality, do_split):
 
         if is_youtube:
             strategies = [
-                # Strategy 1: exact format IDs (most reliable)
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", fmt, "--proxy", PROXY_URL],
-                # Strategy 2: mweb with simple best
                 ["--extractor-args", "youtube:player_client=mweb",
                  "--format", "best[ext=mp4]/best", "--proxy", PROXY_URL],
-                # Strategy 3: format 18 (360p, always works, video+audio combined)
+                ["--extractor-args", "youtube:player_client=tv_embedded",
+                 "--format", "best", "--proxy", PROXY_URL],
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", "18", "--proxy", PROXY_URL],
-                # Strategy 4: absolute fallback
-                ["--format", "best", "--proxy", PROXY_URL],
             ]
         else:
             strategies = [
@@ -83,25 +110,20 @@ def run_download(job_id, url, cookies_content, quality, do_split):
 
         for i, extra_args in enumerate(strategies):
             update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
-
             cmd = [
-                "yt-dlp",
-                "--no-warnings",
+                "yt-dlp", "--no-warnings",
                 "--merge-output-format", "mp4",
                 "--remote-components", "ejs:github",
-                "--output", f"{work_dir}/%(title).100B.%(ext)s",
                 "--restrict-filenames",
+                "--output", f"{work_dir}/%(title).100B.%(ext)s",
             ] + extra_args
-
             if cookies_path:
                 cmd += ["--cookies", cookies_path]
             if is_m3u8:
                 cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
-
             cmd.append(url)
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
-
             if result.returncode == 0:
                 for fname in os.listdir(work_dir):
                     if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
@@ -109,45 +131,71 @@ def run_download(job_id, url, cookies_content, quality, do_split):
                         break
                 if downloaded:
                     break
-
             last_error = result.stderr[-600:] if result.stderr else "Unknown error"
 
         if not downloaded:
             update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
             return
 
-        # Split or keep as single file
-        if do_split:
+        # Split if needed
+        if do_split and os.path.getsize(downloaded) > 45 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
-            if os.path.getsize(downloaded) > 45 * 1024 * 1024:
-                parts = split_video_file(downloaded, work_dir)
+            parts = split_video_file(downloaded, work_dir)
+            if parts:
                 os.remove(downloaded)
-                final_files = parts if parts else [downloaded]
+                final_files = parts
             else:
                 final_files = [downloaded]
         else:
             final_files = [downloaded]
 
-        update_job(job_id, "done", f"✅ Ready: {len(final_files)} file(s)", final_files)
+        # Try uploading to Drive via service account
+        update_job(job_id, "running", f"Uploading {len(final_files)} file(s) to Drive…")
+        drive_links = []
+        failed_files = []
+
+        for fpath in final_files:
+            try:
+                link = upload_to_drive(fpath, folder_id)
+                drive_links.append({"name": os.path.basename(fpath), "link": link})
+            except Exception as e:
+                failed_files.append(fpath)
+
+        if drive_links and not failed_files:
+            # All uploaded successfully
+            msg = "✅ Uploaded to Drive!\n\n"
+            for f in drive_links:
+                msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
+            update_job(job_id, "done", msg, final_files, drive_links)
+        elif drive_links and failed_files:
+            # Partial success
+            msg = "⚠️ Some files uploaded:\n\n"
+            for f in drive_links:
+                msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
+            update_job(job_id, "done", msg, failed_files, drive_links)
+        else:
+            # All failed — fall back to Apps Script fetch
+            update_job(job_id, "done", "fallback", final_files, [])
 
     except subprocess.TimeoutExpired:
         update_job(job_id, "error", "❌ Timeout: video took too long.")
     except Exception as e:
         update_job(job_id, "error", f"❌ Unexpected error: {str(e)}")
 
-# ── Routes ─────────────────────────────────────────────────────────────────
+# ── Routes ──────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return jsonify({"status": "Video Downloader Bot is running 🎬"})
 
 @app.route("/download", methods=["POST"])
 def start_download():
-    data     = request.get_json()
-    secret   = data.get("secret", "")
-    url      = data.get("url", "").strip()
-    cookies  = data.get("cookies_content", "").strip()
-    quality  = data.get("quality", "best")
-    do_split = data.get("split_video", "no") == "yes"
+    data      = request.get_json()
+    secret    = data.get("secret", "")
+    url       = data.get("url", "").strip()
+    cookies   = data.get("cookies_content", "").strip()
+    quality   = data.get("quality", "best")
+    do_split  = data.get("split_video", "no") == "yes"
+    folder_id = data.get("folder_id", "")
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
@@ -156,7 +204,11 @@ def start_download():
 
     job_id = str(uuid.uuid4())
     update_job(job_id, "queued", "Job queued…")
-    threading.Thread(target=run_download, args=(job_id, url, cookies, quality, do_split), daemon=True).start()
+    threading.Thread(
+        target=run_download,
+        args=(job_id, url, cookies, quality, do_split, folder_id),
+        daemon=True
+    ).start()
     return jsonify({"job_id": job_id}), 202
 
 @app.route("/status/<job_id>")
@@ -164,42 +216,56 @@ def job_status(job_id):
     job = jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify({"status": job["status"], "message": job["message"]})
+    return jsonify({
+        "status":      job["status"],
+        "message":     job["message"],
+        "drive_links": job.get("drive_links", [])
+    })
 
-# ── kept for backwards compatibility ──────────────────────────────────────
-@app.route("/result/<job_id>")
-def get_result(job_id):
+@app.route("/result_zip/<job_id>")
+def result_zip(job_id):
     if request.args.get("secret") != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         return jsonify({"error": "Not ready"}), 404
-    fpath = job["file_paths"][0] if job["file_paths"] else None
-    if not fpath:
-        return jsonify({"error": "No file"}), 404
-    return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
 
-# ── new multi-file endpoints ───────────────────────────────────────────────
-@app.route("/result_info/<job_id>")
-def result_info(job_id):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    return jsonify({"files": [os.path.basename(p) for p in job["file_paths"]]})
+    work_dir = f"/tmp/{job_id}"
+    try:
+        actual_files = sorted([
+            os.path.join(work_dir, f)
+            for f in os.listdir(work_dir)
+            if f.endswith((".mp4", ".mkv", ".webm"))
+            and not f.startswith("cookies")
+        ])
+    except:
+        return jsonify({"error": "Files no longer on disk"}), 404
 
-@app.route("/result_file/<job_id>/<filename>")
-def result_file(job_id, filename):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    for fpath in job["file_paths"]:
-        if os.path.basename(fpath) == filename:
-            return send_file(fpath, as_attachment=True, download_name=filename)
-    return jsonify({"error": "File not found"}), 404
+    if not actual_files:
+        return jsonify({"error": "No files found"}), 404
+
+    # Auto-split if over 45MB
+    final_files = []
+    for fpath in actual_files:
+        if "_part" not in fpath and os.path.getsize(fpath) > 45 * 1024 * 1024:
+            parts = split_video_file(fpath, work_dir)
+            if parts:
+                os.remove(fpath)
+                final_files.extend(parts)
+            else:
+                final_files.append(fpath)
+        else:
+            final_files.append(fpath)
+
+    if len(final_files) == 1:
+        fpath = final_files[0]
+        return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
+
+    zip_path = os.path.join(work_dir, "parts.zip")
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for p in final_files:
+            zf.write(p, os.path.basename(p))
+    return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
 
 @app.route("/formats", methods=["POST"])
 def check_formats():
@@ -222,75 +288,7 @@ def check_formats():
     cmd.append(url)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({"stdout": result.stdout[-3000:], "stderr": result.stderr[-1000:]})
-@app.route("/result_zip/<job_id>")
-def result_zip(job_id):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
 
-    work_dir = f"/tmp/{job_id}"
-
-    # Scan folder for actual files
-    actual_files = sorted([
-        os.path.join(work_dir, f)
-        for f in os.listdir(work_dir)
-        if f.endswith((".mp4", ".mkv", ".webm"))
-        and not f.startswith("cookies")
-        and "_part" not in f
-    ])
-
-    if not actual_files:
-        # Maybe parts already exist from a previous split
-        part_files = sorted([
-            os.path.join(work_dir, f)
-            for f in os.listdir(work_dir)
-            if "_part" in f and f.endswith(".mp4")
-        ])
-        if part_files:
-            zip_path = os.path.join(work_dir, "parts.zip")
-            with zipfile.ZipFile(zip_path, "w") as zf:
-                for fpath in part_files:
-                    zf.write(fpath, os.path.basename(fpath))
-            return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
-        return jsonify({"error": "No files found on disk"}), 404
-
-    fpath     = actual_files[0]
-    file_size = os.path.getsize(fpath)
-
-    # Always split if file is over 45MB regardless of user choice
-    if file_size > 45 * 1024 * 1024:
-        parts = split_video_file(fpath, work_dir)
-        os.remove(fpath)
-
-        if not parts:
-            return jsonify({"error": "Split failed"}), 500
-
-        zip_path = os.path.join(work_dir, "parts.zip")
-        with zipfile.ZipFile(zip_path, "w") as zf:
-            for p in parts:
-                zf.write(p, os.path.basename(p))
-        return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
-
-    # File is small enough — send directly
-    return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
-@app.route("/debug/<job_id>")
-def debug_job(job_id):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    work_dir = f"/tmp/{job_id}"
-    job = jobs.get(job_id)
-    try:
-        files = os.listdir(work_dir)
-    except:
-        files = ["FOLDER NOT FOUND"]
-    return jsonify({
-        "job": job,
-        "work_dir": work_dir,
-        "files_on_disk": files
-    })
-    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
