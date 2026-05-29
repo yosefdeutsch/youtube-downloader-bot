@@ -87,7 +87,7 @@ def split_video_file(input_path, work_dir, part_size_mb=45):
     ])
     return parts
 
-def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
+def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
@@ -101,18 +101,23 @@ def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
 
         is_youtube = "youtube.com" in url or "youtu.be" in url
         is_m3u8    = ".m3u8" in url
-        fmt        = quality_to_format(quality)
+
+        # Build format selector
+        if format_id and format_id != "best":
+            fmt = format_id
+        elif is_youtube:
+            fmt = "bestvideo[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+        else:
+            fmt = "bestvideo+bestaudio/best"
 
         if is_youtube:
             strategies = [
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", fmt, "--proxy", PROXY_URL],
                 ["--extractor-args", "youtube:player_client=mweb",
-                 "--format", "best[ext=mp4]/best", "--proxy", PROXY_URL],
+                 "--format", fmt, "--proxy", PROXY_URL],
                 ["--extractor-args", "youtube:player_client=tv_embedded",
                  "--format", "best", "--proxy", PROXY_URL],
-                ["--extractor-args", "youtube:player_client=tv_embedded",
-                 "--format", "18", "--proxy", PROXY_URL],
             ]
         else:
             strategies = [
@@ -153,9 +158,15 @@ def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
             update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
             return
 
-        # Always split if over 45MB regardless of user choice
-        file_size = os.path.getsize(downloaded)
-        if file_size > 45 * 1024 * 1024:
+        # Apply custom name if provided
+        if custom_name:
+            new_path = os.path.join(work_dir, custom_name.replace(".mp4","") + ".mp4")
+            os.rename(downloaded, new_path)
+            downloaded = new_path
+
+        # Split into 45MB parts
+        update_job(job_id, "running", "Preparing file(s) for upload…")
+        if os.path.getsize(downloaded) > 45 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
             if parts:
@@ -166,33 +177,24 @@ def run_download(job_id, url, cookies_content, quality, do_split, folder_id):
         else:
             final_files = [downloaded]
 
-        # Try uploading to Drive via service account
-        update_job(job_id, "running", f"Uploading {len(final_files)} file(s) to Drive…")
+        # Upload each part to Drive separately
         drive_links = []
-        failed_files = []
-
-        for fpath in final_files:
+        for idx, fpath in enumerate(final_files):
+            update_job(job_id, "running", f"Uploading part {idx+1} of {len(final_files)} to Drive…")
             try:
                 link = upload_to_drive(fpath, folder_id)
                 drive_links.append({"name": os.path.basename(fpath), "link": link})
             except Exception as e:
-                failed_files.append(fpath)
+                update_job(job_id, "error", f"❌ Upload failed for {os.path.basename(fpath)}: {str(e)}")
+                return
 
-        if drive_links and not failed_files:
-            # All uploaded successfully
-            msg = "✅ Uploaded to Drive!\n\n"
-            for f in drive_links:
-                msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
-            update_job(job_id, "done", msg, final_files, drive_links)
-        elif drive_links and failed_files:
-            # Partial success
-            msg = "⚠️ Some files uploaded:\n\n"
-            for f in drive_links:
-                msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
-            update_job(job_id, "done", msg, failed_files, drive_links)
-        else:
-            # All failed — fall back to Apps Script fetch
-            update_job(job_id, "done", "fallback", final_files, [])
+        msg = "✅ Saved to Drive!\n\n"
+        for f in drive_links:
+            msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
+        if len(drive_links) > 1:
+            msg += f"📦 {len(drive_links)} parts uploaded — play them in order."
+
+        update_job(job_id, "done", msg, final_files, drive_links)
 
     except subprocess.TimeoutExpired:
         update_job(job_id, "error", "❌ Timeout: video took too long.")
@@ -210,9 +212,9 @@ def start_download():
     secret    = data.get("secret", "")
     url       = data.get("url", "").strip()
     cookies   = data.get("cookies_content", "").strip()
-    quality   = data.get("quality", "best")
-    do_split  = data.get("split_video", "no") == "yes"
+    format_id = data.get("format_id", "best")
     folder_id = data.get("folder_id", "")
+    custom_name = data.get("custom_name", "").strip()
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
@@ -223,7 +225,7 @@ def start_download():
     update_job(job_id, "queued", "Job queued…")
     threading.Thread(
         target=run_download,
-        args=(job_id, url, cookies, quality, do_split, folder_id),
+        args=(job_id, url, cookies, format_id, folder_id, custom_name),
         daemon=True
     ).start()
     return jsonify({"job_id": job_id}), 202
