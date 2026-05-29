@@ -1,78 +1,16 @@
-import os, json, uuid, threading, subprocess, zipfile
+import os, uuid, threading, subprocess, zipfile
 from flask import Flask, request, jsonify, send_file
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
 app = Flask(__name__)
-API_SECRET   = os.environ.get("API_SECRET")
-PROXY_URL    = os.environ.get("PROXY_URL", "")
-SA_JSON      = os.environ.get("SERVICE_ACCOUNT_JSON")
-SCOPES       = ["https://www.googleapis.com/auth/drive"]
+API_SECRET = os.environ.get("API_SECRET")
+PROXY_URL  = os.environ.get("PROXY_URL", "")
 
 jobs = {}
 
-def update_job(job_id, status, message, file_paths=None, drive_links=None):
-    jobs[job_id] = {
-        "status":      status,
-        "message":     message,
-        "file_paths":  file_paths  or [],
-        "drive_links": drive_links or []
-    }
+def update_job(job_id, status, message, file_paths=None):
+    jobs[job_id] = {"status": status, "message": message, "file_paths": file_paths or []}
 
-def get_drive_service():
-    info  = json.loads(SA_JSON)
-    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-    return build("drive", "v3", credentials=creds)
-
-def upload_to_drive(fpath, folder_id):
-    info  = json.loads(SA_JSON)
-    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-    drive = build("drive", "v3", credentials=creds)
-
-    fname     = os.path.basename(fpath)
-    file_meta = {
-        "name":    fname,
-        "parents": [folder_id]
-    }
-
-    media = MediaFileUpload(
-        fpath,
-        resumable=True,
-        chunksize=5 * 1024 * 1024
-    )
-
-    request  = drive.files().create(
-        body=file_meta,
-        media_body=media,
-        fields="id,name,webViewLink",
-        supportsAllDrives=True
-    )
-
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-
-    f = response
-    drive.permissions().create(
-        fileId=f["id"],
-        body={"type": "anyone", "role": "reader"},
-        supportsAllDrives=True
-    ).execute()
-
-    return f["webViewLink"]
-
-def quality_to_format(quality):
-    mapping = {
-        "best": "best",
-        "1080": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "720":  "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "480":  "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
-        "360":  "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
-    }
-    return mapping.get(quality, "best")
-
-def split_video_file(input_path, work_dir, part_size_mb=45):
+def split_video_file(input_path, work_dir, part_size_mb=40):
     part_size_bytes = part_size_mb * 1024 * 1024
     base            = os.path.splitext(os.path.basename(input_path))[0]
     output_pattern  = os.path.join(work_dir, f"{base}_part%03d.mp4")
@@ -92,7 +30,7 @@ def split_video_file(input_path, work_dir, part_size_mb=45):
     ])
     return parts
 
-def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name):
+def run_download(job_id, url, cookies_content, format_id, custom_name):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
@@ -107,7 +45,6 @@ def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name
         is_youtube = "youtube.com" in url or "youtu.be" in url
         is_m3u8    = ".m3u8" in url
 
-        # Build format selector
         if format_id and format_id != "best":
             fmt = format_id
         elif is_youtube:
@@ -163,15 +100,14 @@ def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name
             update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
             return
 
-        # Apply custom name if provided
+        # Apply custom name
         if custom_name:
             new_path = os.path.join(work_dir, custom_name.replace(".mp4","") + ".mp4")
             os.rename(downloaded, new_path)
             downloaded = new_path
 
-        # Split into 45MB parts
-        update_job(job_id, "running", "Preparing file(s) for upload…")
-        if os.path.getsize(downloaded) > 45 * 1024 * 1024:
+        # Always split if over 40MB
+        if os.path.getsize(downloaded) > 40 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
             if parts:
@@ -182,44 +118,24 @@ def run_download(job_id, url, cookies_content, format_id, folder_id, custom_name
         else:
             final_files = [downloaded]
 
-        # Upload each part to Drive separately
-        drive_links = []
-        for idx, fpath in enumerate(final_files):
-            update_job(job_id, "running", f"Uploading part {idx+1} of {len(final_files)} to Drive…")
-            try:
-                link = upload_to_drive(fpath, folder_id)
-                drive_links.append({"name": os.path.basename(fpath), "link": link})
-            except Exception as e:
-                import traceback
-                update_job(job_id, "error", f"❌ Upload failed for {os.path.basename(fpath)}: {str(e)}\n{traceback.format_exc()[-500:]}")
-                return
-
-        msg = "✅ Saved to Drive!\n\n"
-        for f in drive_links:
-            msg += f"📁 {f['name']}\n🔗 {f['link']}\n\n"
-        if len(drive_links) > 1:
-            msg += f"📦 {len(drive_links)} parts uploaded — play them in order."
-
-        update_job(job_id, "done", msg, final_files, drive_links)
+        update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
 
     except subprocess.TimeoutExpired:
         update_job(job_id, "error", "❌ Timeout: video took too long.")
     except Exception as e:
         update_job(job_id, "error", f"❌ Unexpected error: {str(e)}")
 
-# ── Routes ──────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return jsonify({"status": "Video Downloader Bot is running 🎬"})
 
 @app.route("/download", methods=["POST"])
 def start_download():
-    data      = request.get_json()
-    secret    = data.get("secret", "")
-    url       = data.get("url", "").strip()
-    cookies   = data.get("cookies_content", "").strip()
-    format_id = data.get("format_id", "best")
-    folder_id = data.get("folder_id", "")
+    data        = request.get_json()
+    secret      = data.get("secret", "")
+    url         = data.get("url", "").strip()
+    cookies     = data.get("cookies_content", "").strip()
+    format_id   = data.get("format_id", "best")
     custom_name = data.get("custom_name", "").strip()
 
     if secret != API_SECRET:
@@ -231,7 +147,7 @@ def start_download():
     update_job(job_id, "queued", "Job queued…")
     threading.Thread(
         target=run_download,
-        args=(job_id, url, cookies, format_id, folder_id, custom_name),
+        args=(job_id, url, cookies, format_id, custom_name),
         daemon=True
     ).start()
     return jsonify({"job_id": job_id}), 202
@@ -242,55 +158,25 @@ def job_status(job_id):
     if not job:
         return jsonify({"error": "Job not found"}), 404
     return jsonify({
-        "status":      job["status"],
-        "message":     job["message"],
-        "drive_links": job.get("drive_links", [])
+        "status":   job["status"],
+        "message":  job["message"],
+        "parts":    len(job.get("file_paths", []))
     })
 
-@app.route("/result_zip/<job_id>")
-def result_zip(job_id):
+@app.route("/part/<job_id>/<int:index>")
+def get_part(job_id, index):
     if request.args.get("secret") != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         return jsonify({"error": "Not ready"}), 404
-
-    work_dir = f"/tmp/{job_id}"
-    try:
-        actual_files = sorted([
-            os.path.join(work_dir, f)
-            for f in os.listdir(work_dir)
-            if f.endswith((".mp4", ".mkv", ".webm"))
-            and not f.startswith("cookies")
-        ])
-    except:
-        return jsonify({"error": "Files no longer on disk"}), 404
-
-    if not actual_files:
-        return jsonify({"error": "No files found"}), 404
-
-    # Auto-split if over 45MB
-    final_files = []
-    for fpath in actual_files:
-        if "_part" not in fpath and os.path.getsize(fpath) > 45 * 1024 * 1024:
-            parts = split_video_file(fpath, work_dir)
-            if parts:
-                os.remove(fpath)
-                final_files.extend(parts)
-            else:
-                final_files.append(fpath)
-        else:
-            final_files.append(fpath)
-
-    if len(final_files) == 1:
-        fpath = final_files[0]
-        return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
-
-    zip_path = os.path.join(work_dir, "parts.zip")
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        for p in final_files:
-            zf.write(p, os.path.basename(p))
-    return send_file(zip_path, as_attachment=True, download_name="video_parts.zip")
+    files = job.get("file_paths", [])
+    if index >= len(files):
+        return jsonify({"error": "Part not found"}), 404
+    fpath = files[index]
+    if not os.path.exists(fpath):
+        return jsonify({"error": "File no longer on disk"}), 404
+    return send_file(fpath, as_attachment=True, download_name=os.path.basename(fpath))
 
 @app.route("/formats", methods=["POST"])
 def check_formats():
