@@ -7,8 +7,14 @@ PROXY_URL  = os.environ.get("PROXY_URL", "")
 
 jobs = {}
 
-def update_job(job_id, status, message, file_paths=None):
-    jobs[job_id] = {"status": status, "message": message, "file_paths": file_paths or []}
+def update_job(job_id, status, message, file_paths=None, custom_name=""):
+    existing = jobs.get(job_id, {})
+    jobs[job_id] = {
+        "status":      status,
+        "message":     message,
+        "file_paths":  file_paths or existing.get("file_paths", []),
+        "custom_name": custom_name or existing.get("custom_name", "")
+    }
 
 def split_video_file(input_path, work_dir, part_size_mb=40):
     part_size_bytes = part_size_mb * 1024 * 1024
@@ -189,7 +195,7 @@ def start_download():
         return jsonify({"error": "url is required"}), 400
 
     job_id = str(uuid.uuid4())
-    update_job(job_id, "queued", "Job queued…")
+    update_job(job_id, "queued", "Job queued…", custom_name=custom_name)
     threading.Thread(
         target=run_download,
         args=(job_id, url, cookies, format_id, custom_name),
@@ -205,7 +211,8 @@ def job_status(job_id):
     return jsonify({
         "status":   job["status"],
         "message":  job["message"],
-        "parts":    len(job.get("file_paths", []))
+        "parts":    len(job.get("file_paths", [])),
+        "custom_name": job.get("custom_name", "")
     })
 
 @app.route("/part/<job_id>/<int:index>")
