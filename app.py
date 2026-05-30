@@ -86,75 +86,94 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             with open(cookies_path, "w") as f:
                 f.write(cookies_content)
 
-        is_youtube = "youtube.com" in url or "youtu.be" in url
-        is_m3u8    = ".m3u8" in url
+        is_youtube     = "youtube.com" in url or "youtu.be" in url
+        is_m3u8        = ".m3u8" in url
+        is_googledrive = "drive.google.com" in url
 
-        if format_id and format_id != "best":
-            # Always merge with best audio even when user picks specific video format
-            fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
-        elif is_youtube:
-            fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
-        else:
-            fmt = "bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
-
-        if is_youtube:
-            strategies = [
-                ["--extractor-args", "youtube:player_client=tv_embedded",
-                 "--format", fmt, "--proxy", PROXY_URL],
-                ["--extractor-args", "youtube:player_client=mweb",
-                 "--format", fmt, "--proxy", PROXY_URL],
-                ["--extractor-args", "youtube:player_client=tv_embedded",
-                 "--format", "best", "--proxy", PROXY_URL],
-            ]
-        else:
-            strategies = [
-                ["--format", "best[ext=mp4]/best"],
-                ["--format", "best"],
-                [],
-            ]
-
-        last_error = ""
         downloaded = None
 
-        for i, extra_args in enumerate(strategies):
-            update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
-            cmd = [
-                "yt-dlp", "--no-warnings",
-                "--merge-output-format", "mp4",
-                "--remote-components", "ejs:github",
-                "--restrict-filenames",
-                "--output", f"{work_dir}/%(title).100B.%(ext)s",
-            ] + extra_args
-            if cookies_path:
-                cmd += ["--cookies", cookies_path]
-            if is_m3u8:
-                cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
-            cmd.append(url)
+        if is_googledrive:
+            import re, urllib.request
+            update_job(job_id, "running", "Downloading from Google Drive…")
+            file_id_match = re.search(r'[-\w]{25,}', url)
+            if not file_id_match:
+                update_job(job_id, "error", "❌ Could not extract file ID from Drive link.")
+                return
+            file_id = file_id_match.group()
+            dl_url  = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+            fname   = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
+            dl_path = os.path.join(work_dir, fname)
+            try:
+                urllib.request.urlretrieve(dl_url, dl_path)
+                downloaded = dl_path
+            except Exception as ex:
+                update_job(job_id, "error", f"❌ Failed to download from Drive: {str(ex)}")
+                return
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
-            if result.returncode == 0:
-                for fname in os.listdir(work_dir):
-                    if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
-                        downloaded = os.path.join(work_dir, fname)
+        else:
+            if format_id and format_id != "best":
+                fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
+            elif is_youtube:
+                fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
+            else:
+                fmt = "bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
+
+            if is_youtube:
+                strategies = [
+                    ["--extractor-args", "youtube:player_client=tv_embedded",
+                     "--format", fmt, "--proxy", PROXY_URL],
+                    ["--extractor-args", "youtube:player_client=mweb",
+                     "--format", fmt, "--proxy", PROXY_URL],
+                    ["--extractor-args", "youtube:player_client=tv_embedded",
+                     "--format", "best", "--proxy", PROXY_URL],
+                ]
+            else:
+                strategies = [
+                    ["--format", "best[ext=mp4]/best"],
+                    ["--format", "best"],
+                    [],
+                ]
+
+            last_error = ""
+            for i, extra_args in enumerate(strategies):
+                update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
+                cmd = [
+                    "yt-dlp", "--no-warnings",
+                    "--merge-output-format", "mp4",
+                    "--remote-components", "ejs:github",
+                    "--restrict-filenames",
+                    "--output", f"{work_dir}/%(title).100B.%(ext)s",
+                ] + extra_args
+                if cookies_path:
+                    cmd += ["--cookies", cookies_path]
+                if is_m3u8:
+                    cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
+                cmd.append(url)
+
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
+                if result.returncode == 0:
+                    for fname in os.listdir(work_dir):
+                        if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
+                            downloaded = os.path.join(work_dir, fname)
+                            break
+                    if downloaded:
                         break
-                if downloaded:
-                    break
-            last_error = result.stderr[-600:] if result.stderr else "Unknown error"
+                last_error = result.stderr[-600:] if result.stderr else "Unknown error"
 
-        if not downloaded:
-            update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
-            return
+            if not downloaded:
+                update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
+                return
 
-        # Compress if needed (for files over 400MB)
+        # Compress if needed
         if compress:
             update_job(job_id, "running", "Compressing video…")
-            base_name   = custom_name if custom_name else os.path.splitext(os.path.basename(downloaded))[0]
+            base_name       = custom_name if custom_name else os.path.splitext(os.path.basename(downloaded))[0]
             compressed_name = base_name.replace(".mp4","") + "_compressed.mp4"
             compressed_path = os.path.join(work_dir, compressed_name)
             compress_cmd = [
                 "ffmpeg", "-i", downloaded,
                 "-vcodec", "libx264",
-                "-crf", "28",          # quality: 18=best, 28=good, 40=low
+                "-crf", "28",
                 "-preset", "fast",
                 "-acodec", "aac",
                 "-b:a", "128k",
@@ -163,8 +182,8 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             result = subprocess.run(compress_cmd, capture_output=True, timeout=3600)
             if result.returncode == 0 and os.path.exists(compressed_path):
                 os.remove(downloaded)
-                downloaded = compressed_path
-                custom_name = compressed_name  # update name to include _compressed
+                downloaded    = compressed_path
+                custom_name   = compressed_name
 
         # Apply custom name (only if not already set by compression)
         if custom_name and not compress:
