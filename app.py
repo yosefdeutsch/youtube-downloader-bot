@@ -149,14 +149,16 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
             parts = split_video_file(downloaded, work_dir)
             if parts and len(parts) > 0:
                 os.remove(downloaded)
-                final_files = parts
+                final_files = [f for f in parts if os.path.exists(f)]
             else:
-                final_files = [downloaded]
+                final_files = [downloaded] if os.path.exists(downloaded) else []
         else:
-            final_files = [downloaded]
+            final_files = [downloaded] if os.path.exists(downloaded) else []
 
-        # Verify all files actually exist before marking done
-        final_files = [f for f in final_files if os.path.exists(f)]
+        if not final_files:
+            update_job(job_id, "error", "❌ No files found after processing.")
+            return
+
         update_job(job_id, "done", f"✅ Ready: {len(final_files)} part(s)", final_files)
 
     except subprocess.TimeoutExpired:
