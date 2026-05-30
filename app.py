@@ -35,10 +35,9 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     else:
         segment_duration = 600
 
-    output_pattern = os.path.join(work_dir, f"{base}_part%03d.mp4")
-    # ffmpeg starts at 000, we'll rename to start at 001 after
+    # Use temp prefix to avoid name conflicts during rename
+    temp_pattern = os.path.join(work_dir, f"temp_split_%03d.mp4")
 
-    # Copy without re-encoding — no RAM spike
     cmd = [
         "ffmpeg", "-i", input_path,
         "-c", "copy",
@@ -46,22 +45,27 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
         "-segment_time", str(segment_duration),
         "-reset_timestamps", "1",
         "-avoid_negative_ts", "make_zero",
-        output_pattern, "-y"
+        temp_pattern, "-y"
     ]
     subprocess.run(cmd, capture_output=True, timeout=600)
 
-    parts = sorted([
+    # Find all temp split files
+    temp_parts = sorted([
         os.path.join(work_dir, f)
         for f in os.listdir(work_dir)
-        if f.startswith(base + "_part") and f.endswith(".mp4")
+        if f.startswith("temp_split_") and f.endswith(".mp4")
     ])
 
-    # Rename parts to start at 001 instead of 000
+    if not temp_parts:
+        return []
+
+    # Rename to final names starting at 001
     renamed = []
-    for idx, p in enumerate(parts):
+    for idx, p in enumerate(temp_parts):
         new_name = os.path.join(work_dir, f"{base}_part{str(idx+1).zfill(3)}.mp4")
         os.rename(p, new_name)
         renamed.append(new_name)
+
     return renamed
 
 def run_download(job_id, url, cookies_content, format_id, custom_name):
