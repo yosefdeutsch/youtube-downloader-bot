@@ -74,7 +74,7 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
 
     return renamed
 
-def run_download(job_id, url, cookies_content, format_id, custom_name):
+def run_download(job_id, url, cookies_content, format_id, custom_name, compress=False):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
@@ -145,8 +145,29 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
             update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
             return
 
-        # Apply custom name
-        if custom_name:
+        # Compress if needed (for files over 400MB)
+        if compress:
+            update_job(job_id, "running", "Compressing video…")
+            base_name   = custom_name if custom_name else os.path.splitext(os.path.basename(downloaded))[0]
+            compressed_name = base_name.replace(".mp4","") + "_compressed.mp4"
+            compressed_path = os.path.join(work_dir, compressed_name)
+            compress_cmd = [
+                "ffmpeg", "-i", downloaded,
+                "-vcodec", "libx264",
+                "-crf", "28",          # quality: 18=best, 28=good, 40=low
+                "-preset", "fast",
+                "-acodec", "aac",
+                "-b:a", "128k",
+                compressed_path, "-y"
+            ]
+            result = subprocess.run(compress_cmd, capture_output=True, timeout=3600)
+            if result.returncode == 0 and os.path.exists(compressed_path):
+                os.remove(downloaded)
+                downloaded = compressed_path
+                custom_name = compressed_name  # update name to include _compressed
+
+        # Apply custom name (only if not already set by compression)
+        if custom_name and not compress:
             new_path = os.path.join(work_dir, custom_name.replace(".mp4","") + ".mp4")
             os.rename(downloaded, new_path)
             downloaded = new_path
@@ -188,6 +209,7 @@ def start_download():
     cookies     = data.get("cookies_content", "").strip()
     format_id   = data.get("format_id", "best")
     custom_name = data.get("custom_name", "").strip()
+    compress    = data.get("compress", False)
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
@@ -195,10 +217,10 @@ def start_download():
         return jsonify({"error": "url is required"}), 400
 
     job_id = str(uuid.uuid4())
-    update_job(job_id, "queued", "Job queued…", custom_name=custom_name)
+    update_job(job_id, "queued", "Job queued…", custom_name=("compressed" if compress and not custom_name else custom_name))
     threading.Thread(
         target=run_download,
-        args=(job_id, url, cookies, format_id, custom_name),
+        args=(job_id, url, cookies, format_id, custom_name, compress),
         daemon=True
     ).start()
     return jsonify({"job_id": job_id}), 202
