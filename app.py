@@ -102,9 +102,9 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
             ]
         else:
             strategies = [
-                ["--format", fmt],
                 ["--format", "best[ext=mp4]/best"],
                 ["--format", "best"],
+                [],
             ]
 
         last_error = ""
