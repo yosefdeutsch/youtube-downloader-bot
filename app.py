@@ -87,9 +87,9 @@ def run_download(job_id, url, cookies_content, format_id, custom_name):
             # Always merge with best audio even when user picks specific video format
             fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
         elif is_youtube:
-            fmt = "bestvideo[vcodec^=av01]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+            fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
         else:
-            fmt = "bestvideo+bestaudio/best"
+            fmt = "bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
 
         if is_youtube:
             strategies = [
