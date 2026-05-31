@@ -86,118 +86,63 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             with open(cookies_path, "w") as f:
                 f.write(cookies_content)
 
-        is_youtube     = "youtube.com" in url or "youtu.be" in url
-        is_m3u8        = ".m3u8" in url
-        is_googledrive = "drive.google.com" in url
+        is_youtube = "youtube.com" in url or "youtu.be" in url
+        is_m3u8    = ".m3u8" in url
 
+        if format_id and format_id != "best":
+            fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
+        elif is_youtube:
+            fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
+        else:
+            fmt = "bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
+
+        if is_youtube:
+            strategies = [
+                ["--extractor-args", "youtube:player_client=tv_embedded",
+                 "--format", fmt, "--proxy", PROXY_URL],
+                ["--extractor-args", "youtube:player_client=mweb",
+                 "--format", fmt, "--proxy", PROXY_URL],
+                ["--extractor-args", "youtube:player_client=tv_embedded",
+                 "--format", "best", "--proxy", PROXY_URL],
+            ]
+        else:
+            strategies = [
+                ["--format", "best[ext=mp4]/best"],
+                ["--format", "best"],
+                [],
+            ]
+
+        last_error = ""
         downloaded = None
 
-        if is_googledrive:
-            import re, requests as req_lib
-            update_job(job_id, "running", "Downloading from Google Drive…")
-            file_id_match = re.search(r'[-\w]{25,}', url)
-            if not file_id_match:
-                update_job(job_id, "error", "❌ Could not extract file ID from Drive link.")
-                return
-            file_id  = file_id_match.group()
-            fname    = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
-            dl_path  = os.path.join(work_dir, fname)
-            try:
-                session  = req_lib.Session()
-                dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}"
-                response = session.get(dl_url, stream=True)
+        for i, extra_args in enumerate(strategies):
+            update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
+            cmd = [
+                "yt-dlp", "--no-warnings",
+                "--merge-output-format", "mp4",
+                "--remote-components", "ejs:github",
+                "--restrict-filenames",
+                "--output", f"{work_dir}/%(title).100B.%(ext)s",
+            ] + extra_args
+            if cookies_path:
+                cmd += ["--cookies", cookies_path]
+            if is_m3u8:
+                cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
+            cmd.append(url)
 
-                # Handle Google's virus scan warning for large files
-                token = None
-                for key, value in response.cookies.items():
-                    if key.startswith("download_warning"):
-                        token = value
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
+            if result.returncode == 0:
+                for fname in os.listdir(work_dir):
+                    if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
+                        downloaded = os.path.join(work_dir, fname)
                         break
+                if downloaded:
+                    break
+            last_error = result.stderr[-600:] if result.stderr else "Unknown error"
 
-                # Also check response content for confirmation token
-                if not token and b"confirm=" in response.content[:2000]:
-                    import re as re2
-                    match = re2.search(rb'confirm=([0-9A-Za-z_\-]+)', response.content[:2000])
-                    if match:
-                        token = match.group(1).decode()
-
-                if token:
-                    dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={token}"
-                    response = session.get(dl_url, stream=True)
-
-                # Write file in chunks
-                with open(dl_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-
-                # Verify file is not an HTML error page
-                file_size_check = os.path.getsize(dl_path)
-                if file_size_check < 10000:
-                    with open(dl_path, "rb") as f:
-                        header = f.read(100)
-                    if b"<html" in header.lower() or b"<!doc" in header.lower():
-                        update_job(job_id, "error", "❌ Google Drive returned an error page. Make sure the file is shared publicly (Anyone with link).")
-                        return
-
-                downloaded = dl_path
-            except Exception as ex:
-                update_job(job_id, "error", f"❌ Failed to download from Drive: {str(ex)}")
-                return
-
-        else:
-            if format_id and format_id != "best":
-                fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
-            elif is_youtube:
-                fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
-            else:
-                fmt = "bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
-
-            if is_youtube:
-                strategies = [
-                    ["--extractor-args", "youtube:player_client=tv_embedded",
-                     "--format", fmt, "--proxy", PROXY_URL],
-                    ["--extractor-args", "youtube:player_client=mweb",
-                     "--format", fmt, "--proxy", PROXY_URL],
-                    ["--extractor-args", "youtube:player_client=tv_embedded",
-                     "--format", "best", "--proxy", PROXY_URL],
-                ]
-            else:
-                strategies = [
-                    ["--format", "best[ext=mp4]/best"],
-                    ["--format", "best"],
-                    [],
-                ]
-
-            last_error = ""
-            for i, extra_args in enumerate(strategies):
-                update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
-                cmd = [
-                    "yt-dlp", "--no-warnings",
-                    "--merge-output-format", "mp4",
-                    "--remote-components", "ejs:github",
-                    "--restrict-filenames",
-                    "--output", f"{work_dir}/%(title).100B.%(ext)s",
-                ] + extra_args
-                if cookies_path:
-                    cmd += ["--cookies", cookies_path]
-                if is_m3u8:
-                    cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
-                cmd.append(url)
-
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
-                if result.returncode == 0:
-                    for fname in os.listdir(work_dir):
-                        if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
-                            downloaded = os.path.join(work_dir, fname)
-                            break
-                    if downloaded:
-                        break
-                last_error = result.stderr[-600:] if result.stderr else "Unknown error"
-
-            if not downloaded:
-                update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
-                return
+        if not downloaded:
+            update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
+            return
 
         # Compress if needed
         if compress:
@@ -217,10 +162,10 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             result = subprocess.run(compress_cmd, capture_output=True, timeout=3600)
             if result.returncode == 0 and os.path.exists(compressed_path):
                 os.remove(downloaded)
-                downloaded    = compressed_path
-                custom_name   = compressed_name
+                downloaded  = compressed_path
+                custom_name = compressed_name
 
-        # Apply custom name (only if not already set by compression)
+        # Apply custom name
         if custom_name and not compress:
             new_path = os.path.join(work_dir, custom_name.replace(".mp4","") + ".mp4")
             os.rename(downloaded, new_path)
