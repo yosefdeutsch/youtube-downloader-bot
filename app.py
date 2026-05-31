@@ -36,10 +36,12 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     file_size = os.path.getsize(input_path)
 
     if duration > 0 and file_size > 0:
-        segment_duration = int((part_size_bytes / file_size) * duration)
-        segment_duration = max(30, segment_duration)
+        # Calculate bytes per second, then seconds per 38MB (safety margin)
+        bytes_per_second  = file_size / duration
+        segment_duration  = int((38 * 1024 * 1024) / bytes_per_second)
+        segment_duration  = max(30, min(segment_duration, 3600))
     else:
-        segment_duration = 600
+        segment_duration = 300
 
     # Use temp prefix to avoid name conflicts during rename
     temp_pattern = os.path.join(work_dir, f"temp_split_%03d.mp4")
