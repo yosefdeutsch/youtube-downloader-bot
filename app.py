@@ -122,6 +122,22 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                         update_job(job_id, "error", f"❌ Google Drive blocked the download. Content: {header[:200]}")
                         return
                 downloaded = dl_path
+                # Convert to mp3 if audio only
+                if audio_only:
+                    update_job(job_id, "running", "Extracting audio to MP3…")
+                    mp3_name = os.path.splitext(fname)[0] + ".mp3"
+                    mp3_path = os.path.join(work_dir, mp3_name)
+                    mp3_cmd  = [
+                        "ffmpeg", "-i", dl_path,
+                        "-vn",
+                        "-acodec", "libmp3lame",
+                        "-q:a", "0",
+                        mp3_path, "-y"
+                    ]
+                    result = subprocess.run(mp3_cmd, capture_output=True, timeout=600)
+                    if result.returncode == 0 and os.path.exists(mp3_path):
+                        os.remove(dl_path)
+                        downloaded = mp3_path
             except Exception as ex:
                 update_job(job_id, "error", f"❌ Drive download failed: {str(ex)}")
                 return
@@ -368,3 +384,4 @@ def part_ready(job_id, index):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+    
