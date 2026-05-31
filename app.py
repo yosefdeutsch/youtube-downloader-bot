@@ -132,6 +132,7 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                         "-vn",
                         "-acodec", "libmp3lame",
                         "-q:a", "0",
+                        "-map_metadata", "0",
                         mp3_path, "-y"
                     ]
                     result = subprocess.run(mp3_cmd, capture_output=True, timeout=600)
