@@ -236,10 +236,16 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
 
         # Apply custom name
         if custom_name and not compress:
-            ext      = ".mp3" if audio_only else ".mp4"
-            new_path = os.path.join(work_dir, custom_name.replace(".mp4","").replace(".mp3","") + ext)
-            os.rename(downloaded, new_path)
-            downloaded = new_path
+            ext          = ".mp3" if audio_only else ".mp4"
+            # Store original custom name for Drive upload (supports Hebrew/Unicode)
+            safe_name    = custom_name.replace(".mp4","").replace(".mp3","")
+            new_path     = os.path.join(work_dir, safe_name + ext)
+            try:
+                os.rename(downloaded, new_path)
+                downloaded = new_path
+            except Exception:
+                # If rename fails (e.g. filesystem doesn't support Unicode), keep original
+                pass
 
         # Always split if over 40MB
         file_size = os.path.getsize(downloaded)
