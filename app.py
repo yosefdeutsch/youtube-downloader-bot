@@ -89,6 +89,14 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
         is_youtube = "youtube.com" in url or "youtu.be" in url
         is_m3u8    = ".m3u8" in url
 
+        # Convert Google Drive share URL to direct download URL
+        if "drive.google.com" in url:
+            import re
+            file_id_match = re.search(r'/file/d/([-\w]+)', url)
+            if file_id_match:
+                file_id = file_id_match.group(1)
+                url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+
         if format_id and format_id != "best":
             fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
         elif is_youtube:
