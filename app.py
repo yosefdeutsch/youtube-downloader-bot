@@ -89,13 +89,42 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
         is_youtube = "youtube.com" in url or "youtu.be" in url
         is_m3u8    = ".m3u8" in url
 
-        # Convert Google Drive share URL to direct download URL
+        # Handle Google Drive directly without yt-dlp
         if "drive.google.com" in url:
-            import re
+            import re, requests as req_lib
             file_id_match = re.search(r'/file/d/([-\w]+)', url)
-            if file_id_match:
-                file_id = file_id_match.group(1)
-                url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
+            if not file_id_match:
+                update_job(job_id, "error", "❌ Could not extract file ID from Drive link.")
+                return
+            file_id  = file_id_match.group(1)
+            fname    = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
+            dl_path  = os.path.join(work_dir, fname)
+            update_job(job_id, "running", "Downloading from Google Drive…")
+            try:
+                session  = req_lib.Session()
+                dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}"
+                response = session.get(dl_url, stream=True)
+                # Handle large file confirmation token
+                token = None
+                for key, value in response.cookies.items():
+                    if key.startswith("download_warning"):
+                        token = value
+                if token:
+                    response = session.get(dl_url + f"&confirm={token}", stream=True)
+                with open(dl_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=1024*1024):
+                        if chunk:
+                            f.write(chunk)
+                # Check it's not an HTML error page
+                if os.path.getsize(dl_path) < 10000:
+                    with open(dl_path, "rb") as f:
+                        if b"<html" in f.read(200).lower():
+                            update_job(job_id, "error", "❌ Google Drive blocked the download. Make sure the file is shared as 'Anyone with the link'.")
+                            return
+                downloaded = dl_path
+            except Exception as ex:
+                update_job(job_id, "error", f"❌ Drive download failed: {str(ex)}")
+                return
 
         if format_id and format_id != "best":
             fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
@@ -121,9 +150,8 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             ]
 
         last_error = ""
-        downloaded = None
-
-        for i, extra_args in enumerate(strategies):
+        if not downloaded:
+            for i, extra_args in enumerate(strategies):
             update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
             cmd = [
                 "yt-dlp", "--no-warnings",
