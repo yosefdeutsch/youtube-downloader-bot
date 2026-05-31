@@ -104,24 +104,24 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             dl_path = os.path.join(work_dir, fname)
             update_job(job_id, "running", "Downloading from Google Drive…")
             try:
-                session  = req_lib.Session()
-                dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}"
-                response = session.get(dl_url, stream=True)
-                token    = None
-                for key, value in response.cookies.items():
-                    if key.startswith("download_warning"):
-                        token = value
-                if token:
-                    response = session.get(dl_url + f"&confirm={token}", stream=True)
+                session = req_lib.Session()
+                # Use gdown-style URL which handles auth automatically
+                dl_url  = f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                }
+                response = session.get(dl_url, headers=headers, stream=True)
                 with open(dl_path, "wb") as f:
                     for chunk in response.iter_content(chunk_size=1024*1024):
                         if chunk:
                             f.write(chunk)
-                if os.path.getsize(dl_path) < 10000:
+                # Check it's not an HTML error page
+                if os.path.getsize(dl_path) < 50000:
                     with open(dl_path, "rb") as f:
-                        if b"<html" in f.read(200).lower():
-                            update_job(job_id, "error", "❌ Google Drive blocked the download. Make sure the file is shared as 'Anyone with the link'.")
-                            return
+                        header = f.read(500)
+                    if b"<html" in header.lower() or b"<!doc" in header.lower():
+                        update_job(job_id, "error", f"❌ Google Drive blocked the download. Content: {header[:200]}")
+                        return
                 downloaded = dl_path
             except Exception as ex:
                 update_job(job_id, "error", f"❌ Drive download failed: {str(ex)}")
