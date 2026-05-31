@@ -346,7 +346,7 @@ def check_formats():
         with open(cookies_path, "w") as f:
             f.write(cookies_content)
     cmd = ["yt-dlp", "--list-formats", "--remote-components", "ejs:github", "--proxy", PROXY_URL,
-           "--extractor-args", "youtube:player_client=web"]
+           "--extractor-args", "youtube:player_client=web,tv_embedded"]
     if cookies_path:
         cmd += ["--cookies", cookies_path]
     cmd.append(url)
