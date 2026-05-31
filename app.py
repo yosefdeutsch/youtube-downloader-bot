@@ -120,10 +120,12 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             cmd = [
                 "yt-dlp", "--no-warnings",
                 "--merge-output-format", "mp4",
-                "--remote-components", "ejs:github",
                 "--restrict-filenames",
                 "--output", f"{work_dir}/%(title).100B.%(ext)s",
-            ] + extra_args
+            ]
+            if is_youtube:
+                cmd += ["--remote-components", "ejs:github"]
+            cmd += extra_args
             if cookies_path:
                 cmd += ["--cookies", cookies_path]
             if is_m3u8:
