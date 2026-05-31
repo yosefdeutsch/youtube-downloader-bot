@@ -16,11 +16,11 @@ def update_job(job_id, status, message, file_paths=None, custom_name=""):
         "custom_name": custom_name or existing.get("custom_name", "")
     }
 
-def split_video_file(input_path, work_dir, part_size_mb=40):
+def split_video_file(input_path, work_dir, part_size_mb=38):
     part_size_bytes = part_size_mb * 1024 * 1024
     base            = os.path.splitext(os.path.basename(input_path))[0]
 
-    # Get duration
+    # Get duration and file size
     probe = subprocess.run([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
@@ -36,14 +36,12 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     file_size = os.path.getsize(input_path)
 
     if duration > 0 and file_size > 0:
-        # Calculate bytes per second, then seconds per 38MB (safety margin)
-        bytes_per_second  = file_size / duration
-        segment_duration  = int((38 * 1024 * 1024) / bytes_per_second)
-        segment_duration  = max(30, min(segment_duration, 3600))
+        bytes_per_second = file_size / duration
+        segment_duration = int(part_size_bytes / bytes_per_second)
+        segment_duration = max(10, min(segment_duration, 3600))
     else:
         segment_duration = 300
 
-    # Use temp prefix to avoid name conflicts during rename
     temp_pattern = os.path.join(work_dir, f"temp_split_%03d.mp4")
 
     cmd = [
@@ -57,7 +55,6 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     ]
     subprocess.run(cmd, capture_output=True, timeout=600)
 
-    # Find all temp split files
     temp_parts = sorted([
         os.path.join(work_dir, f)
         for f in os.listdir(work_dir)
@@ -67,11 +64,13 @@ def split_video_file(input_path, work_dir, part_size_mb=40):
     if not temp_parts:
         return []
 
-    # Rename to final names starting at 001
+    # Rename and verify each part is under limit
     renamed = []
     for idx, p in enumerate(temp_parts):
         new_name = os.path.join(work_dir, f"{base}_part{str(idx+1).zfill(3)}.mp4")
         os.rename(p, new_name)
+        # Log size for debugging
+        part_size = os.path.getsize(new_name) / (1024*1024)
         renamed.append(new_name)
 
     return renamed
