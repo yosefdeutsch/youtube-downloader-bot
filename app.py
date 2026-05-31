@@ -93,18 +93,53 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
         downloaded = None
 
         if is_googledrive:
-            import re, urllib.request
+            import re, requests as req_lib
             update_job(job_id, "running", "Downloading from Google Drive…")
             file_id_match = re.search(r'[-\w]{25,}', url)
             if not file_id_match:
                 update_job(job_id, "error", "❌ Could not extract file ID from Drive link.")
                 return
-            file_id = file_id_match.group()
-            dl_url  = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
-            fname   = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
-            dl_path = os.path.join(work_dir, fname)
+            file_id  = file_id_match.group()
+            fname    = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
+            dl_path  = os.path.join(work_dir, fname)
             try:
-                urllib.request.urlretrieve(dl_url, dl_path)
+                session  = req_lib.Session()
+                dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}"
+                response = session.get(dl_url, stream=True)
+
+                # Handle Google's virus scan warning for large files
+                token = None
+                for key, value in response.cookies.items():
+                    if key.startswith("download_warning"):
+                        token = value
+                        break
+
+                # Also check response content for confirmation token
+                if not token and b"confirm=" in response.content[:2000]:
+                    import re as re2
+                    match = re2.search(rb'confirm=([0-9A-Za-z_\-]+)', response.content[:2000])
+                    if match:
+                        token = match.group(1).decode()
+
+                if token:
+                    dl_url   = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={token}"
+                    response = session.get(dl_url, stream=True)
+
+                # Write file in chunks
+                with open(dl_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                # Verify file is not an HTML error page
+                file_size_check = os.path.getsize(dl_path)
+                if file_size_check < 10000:
+                    with open(dl_path, "rb") as f:
+                        header = f.read(100)
+                    if b"<html" in header.lower() or b"<!doc" in header.lower():
+                        update_job(job_id, "error", "❌ Google Drive returned an error page. Make sure the file is shared publicly (Anyone with link).")
+                        return
+
                 downloaded = dl_path
             except Exception as ex:
                 update_job(job_id, "error", f"❌ Failed to download from Drive: {str(ex)}")
