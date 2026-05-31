@@ -75,7 +75,7 @@ def split_video_file(input_path, work_dir, part_size_mb=38):
 
     return renamed
 
-def run_download(job_id, url, cookies_content, format_id, custom_name, compress=False):
+def run_download(job_id, url, cookies_content, format_id, custom_name, compress=False, audio_only=False):
     try:
         update_job(job_id, "running", "Starting download…")
         work_dir = f"/tmp/{job_id}"
@@ -127,7 +127,9 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 return
 
         else:
-            if format_id and format_id != "best":
+            if audio_only:
+                fmt = format_id if format_id and format_id not in ["best", "bestaudio"] else "bestaudio[ext=m4a]/bestaudio/best"
+            elif format_id and format_id != "best":
                 fmt = f"{format_id}+bestaudio[ext=m4a]/{format_id}+bestaudio/{format_id}"
             elif is_youtube:
                 fmt = "bestvideo[vcodec^=av01][filesize<400M]+bestaudio[ext=m4a]/bestvideo[filesize<400M]+bestaudio/best[filesize<400M]/best"
@@ -153,12 +155,24 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
             last_error = ""
             for i, extra_args in enumerate(strategies):
                 update_job(job_id, "running", f"Trying method {i+1} of {len(strategies)}…")
-                cmd = [
-                    "yt-dlp", "--no-warnings",
-                    "--merge-output-format", "mp4",
-                    "--restrict-filenames",
-                    "--output", f"{work_dir}/%(title).100B.%(ext)s",
-                ]
+                if audio_only:
+                    cmd = [
+                        "yt-dlp", "--no-warnings",
+                        "--extract-audio",
+                        "--audio-format", "mp3",
+                        "--audio-quality", "0",
+                        "--embed-thumbnail",
+                        "--add-metadata",
+                        "--restrict-filenames",
+                        "--output", f"{work_dir}/%(title).100B.%(ext)s",
+                    ]
+                else:
+                    cmd = [
+                        "yt-dlp", "--no-warnings",
+                        "--merge-output-format", "mp4",
+                        "--restrict-filenames",
+                        "--output", f"{work_dir}/%(title).100B.%(ext)s",
+                    ]
                 if is_youtube:
                     cmd += ["--remote-components", "ejs:github"]
                 cmd += extra_args
@@ -171,7 +185,7 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
                 if result.returncode == 0:
                     for fname in os.listdir(work_dir):
-                        if fname.endswith((".mp4", ".mkv", ".webm")) and not fname.startswith("cookies"):
+                        if fname.endswith((".mp4", ".mkv", ".webm", ".mp3")) and not fname.startswith("cookies"):
                             downloaded = os.path.join(work_dir, fname)
                             break
                     if downloaded:
@@ -205,14 +219,16 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
 
         # Apply custom name
         if custom_name and not compress:
-            new_path = os.path.join(work_dir, custom_name.replace(".mp4","") + ".mp4")
+            ext      = ".mp3" if audio_only else ".mp4"
+            new_path = os.path.join(work_dir, custom_name.replace(".mp4","").replace(".mp3","") + ext)
             os.rename(downloaded, new_path)
             downloaded = new_path
 
         # Always split if over 40MB
         file_size = os.path.getsize(downloaded)
         update_job(job_id, "running", f"File size: {file_size // (1024*1024)}MB. Preparing…")
-        if file_size > 40 * 1024 * 1024:
+        # Don't split audio files
+        if not audio_only and file_size > 40 * 1024 * 1024:
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
             if parts and len(parts) > 0:
@@ -247,6 +263,7 @@ def start_download():
     format_id   = data.get("format_id", "best")
     custom_name = data.get("custom_name", "").strip()
     compress    = data.get("compress", False)
+    audio_only  = data.get("audio_only", False)
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
@@ -257,7 +274,7 @@ def start_download():
     update_job(job_id, "queued", "Job queued…", custom_name=("compressed" if compress and not custom_name else custom_name))
     threading.Thread(
         target=run_download,
-        args=(job_id, url, cookies, format_id, custom_name, compress),
+        args=(job_id, url, cookies, format_id, custom_name, compress, audio_only),
         daemon=True
     ).start()
     return jsonify({"job_id": job_id}), 202
@@ -288,11 +305,12 @@ def get_part(job_id, index):
     if not os.path.exists(fpath):
         return jsonify({"error": "File no longer on disk"}), 404
     fname = os.path.basename(fpath)
+    mimetype = "audio/mpeg" if fname.endswith(".mp3") else "video/mp4"
     return send_file(
         fpath,
         as_attachment=True,
         download_name=fname,
-        mimetype="video/mp4"
+        mimetype=mimetype
     )
 
 @app.route("/formats", methods=["POST"])
