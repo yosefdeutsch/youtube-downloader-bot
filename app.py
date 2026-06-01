@@ -1,5 +1,12 @@
-import os, uuid, threading, subprocess, zipfile
+import os, uuid, threading, subprocess, zipfile, re
 from flask import Flask, request, jsonify, send_file
+
+def sanitize_filename(filename):
+    """Remove only truly illegal filename characters, keep Hebrew and Unicode."""
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    if len(filename) > 200:
+        filename = filename[:200]
+    return filename.strip()
 
 app = Flask(__name__)
 API_SECRET = os.environ.get("API_SECRET")
@@ -204,7 +211,17 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 if result.returncode == 0:
                     for fname in os.listdir(work_dir):
                         if fname.endswith((".mp4", ".mkv", ".webm", ".mp3")) and not fname.startswith("cookies"):
-                            downloaded = os.path.join(work_dir, fname)
+                            # Rename to sanitized version preserving Hebrew
+                            clean_name = sanitize_filename(fname)
+                            clean_path = os.path.join(work_dir, clean_name)
+                            if clean_name != fname:
+                                try:
+                                    os.rename(os.path.join(work_dir, fname), clean_path)
+                                    downloaded = clean_path
+                                except:
+                                    downloaded = os.path.join(work_dir, fname)
+                            else:
+                                downloaded = os.path.join(work_dir, fname)
                             break
                     if downloaded:
                         break
