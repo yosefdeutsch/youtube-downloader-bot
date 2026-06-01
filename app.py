@@ -209,7 +209,9 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
                 if result.returncode == 0:
-                    for fname in os.listdir(work_dir):
+                    all_files = os.listdir(work_dir)
+                    update_job(job_id, "running", f"Files on disk: {all_files}")
+                    for fname in all_files:
                         if fname.endswith((".mp4", ".mkv", ".webm", ".mp3")) and not fname.startswith("cookies"):
                             # Rename to sanitized version preserving Hebrew
                             clean_name = sanitize_filename(fname)
