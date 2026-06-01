@@ -193,7 +193,8 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 if is_youtube:
                     cmd += ["--remote-components", "ejs:github"]
                 cmd += extra_args
-                if cookies_path:
+                # Only use cookies for YouTube
+                if cookies_path and is_youtube:
                     cmd += ["--cookies", cookies_path]
                 if is_m3u8:
                     cmd += ["--downloader", "ffmpeg", "--hls-prefer-ffmpeg"]
