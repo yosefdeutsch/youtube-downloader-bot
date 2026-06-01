@@ -415,7 +415,19 @@ def part_ready(job_id, index):
     if index < len(files) and os.path.exists(files[index]):
         return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
     return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
-    
+
+@app.route("/filename/<job_id>/<int:index>")
+def get_filename(job_id, index):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
+    files = job.get("file_paths", [])
+    if index >= len(files):
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"filename": os.path.basename(files[index])})
+        
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
