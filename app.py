@@ -180,14 +180,14 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                         "--audio-quality", "0",
                         "--embed-thumbnail",
                         "--add-metadata",
-                        "--output", f"{work_dir}/%(title)s.%(ext)s",
+                        "--output", f"{work_dir}/%(title).200B.%(ext)s",
                 "--windows-filenames",
                     ]
                 else:
                     cmd = [
                         "yt-dlp", "--no-warnings",
                         "--merge-output-format", "mp4",
-                        "--output", f"{work_dir}/%(title)s.%(ext)s",
+                        "--output", f"{work_dir}/%(title).200B.%(ext)s",
                 "--windows-filenames",
                     ]
                 if is_youtube:
