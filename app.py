@@ -187,15 +187,15 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                         "--audio-quality", "0",
                         "--embed-thumbnail",
                         "--add-metadata",
-                        "--output", f"{work_dir}/%(title).200B.%(ext)s",
-                "--windows-filenames",
+                        "--output", f"{work_dir}/%(id)s.%(ext)s",
+                        "--print", "after_move:%(title)s\t%(id)s\t%(ext)s",
                     ]
                 else:
                     cmd = [
                         "yt-dlp", "--no-warnings",
                         "--merge-output-format", "mp4",
-                        "--output", f"{work_dir}/%(title).200B.%(ext)s",
-                "--windows-filenames",
+                        "--output", f"{work_dir}/%(id)s.%(ext)s",
+                        "--print", "after_move:%(title)s\t%(id)s\t%(ext)s",
                     ]
                 if is_youtube:
                     cmd += ["--remote-components", "ejs:github"]
@@ -209,21 +209,29 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
 
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=3000)
                 if result.returncode == 0:
-                    all_files = os.listdir(work_dir)
-                    update_job(job_id, "running", f"Files on disk: {all_files}")
-                    for fname in all_files:
+                    # Parse real title from stdout
+                    real_title = None
+                    for line in result.stdout.splitlines():
+                        if "\t" in line:
+                            parts_line = line.split("\t")
+                            if len(parts_line) >= 3:
+                                real_title = parts_line[0].strip()
+                                break
+
+                    for fname in os.listdir(work_dir):
                         if fname.endswith((".mp4", ".mkv", ".webm", ".mp3")) and not fname.startswith("cookies"):
-                            # Rename to sanitized version preserving Hebrew
-                            clean_name = sanitize_filename(fname)
-                            clean_path = os.path.join(work_dir, clean_name)
-                            if clean_name != fname:
+                            fpath = os.path.join(work_dir, fname)
+                            if real_title:
+                                ext      = os.path.splitext(fname)[1]
+                                new_name = sanitize_filename(real_title) + ext
+                                new_path = os.path.join(work_dir, new_name)
                                 try:
-                                    os.rename(os.path.join(work_dir, fname), clean_path)
-                                    downloaded = clean_path
+                                    os.rename(fpath, new_path)
+                                    downloaded = new_path
                                 except:
-                                    downloaded = os.path.join(work_dir, fname)
+                                    downloaded = fpath
                             else:
-                                downloaded = os.path.join(work_dir, fname)
+                                downloaded = fpath
                             break
                     if downloaded:
                         break
