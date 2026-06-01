@@ -210,7 +210,7 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 last_error = result.stderr[-600:] if result.stderr else "Unknown error"
 
             if not downloaded:
-                update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error}")
+                update_job(job_id, "error", f"yt-dlp error (all methods failed):\n{last_error[:300]}")
                 return
 
         # Compress if needed
