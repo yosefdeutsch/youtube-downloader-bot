@@ -500,6 +500,8 @@ def search_youtube():
                 else:
                     continue
                 channel_videos = get_channel_videos(ch_url)
+                # Debug: store channel info
+                ch_debug = {"url": ch_url, "videos_found": len(channel_videos)}
                 break
 
         # Step 3 — Regular video search
@@ -530,7 +532,12 @@ def search_youtube():
         if not page_results:
             return jsonify({"error": "No results found"}), 404
 
-        return jsonify({"results": page_results, "has_more": has_more, "next_page": page + 1})
+        return jsonify({
+            "results":      page_results,
+            "has_more":     has_more,
+            "next_page":    page + 1,
+            "channel_debug": ch_debug if 'ch_debug' in dir() else "no channel found"
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
