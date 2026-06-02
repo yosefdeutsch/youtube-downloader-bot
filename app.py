@@ -530,7 +530,47 @@ def search_youtube():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-            
+
+@app.route("/debug_search", methods=["POST"])
+def debug_search():
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    query  = data.get("query", "").strip()
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        import urllib.parse, urllib.request, json as json_lib
+        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        encoded  = urllib.parse.quote(query)
+        url      = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAg%3D%3D"
+        req      = urllib.request.Request(url, headers=headers)
+        html     = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+        match    = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
+        data_json = json_lib.loads(match.group(1))
+        contents = (data_json
+            .get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [{}])[0]
+            .get("itemSectionRenderer", {})
+            .get("contents", []))
+        # Show what types of items we got
+        types = [list(item.keys()) for item in contents[:5]]
+        # Show first channelRenderer if any
+        channels = []
+        for item in contents:
+            cr = item.get("channelRenderer", {})
+            if cr:
+                channels.append({
+                    "title": cr.get("title", {}).get("simpleText", ""),
+                    "handle": cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", ""),
+                    "id": cr.get("channelId", "")
+                })
+        return jsonify({"item_types": types, "channels_found": channels})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+                    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
