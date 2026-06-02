@@ -416,23 +416,12 @@ def part_ready(job_id, index):
         return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
     return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
 
-@app.route("/filename/<job_id>/<int:index>")
-def get_filename(job_id, index):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify({"error": "Not ready"}), 404
-    files = job.get("file_paths", [])
-    if index >= len(files):
-        return jsonify({"error": "Not found"}), 404
-    return jsonify({"filename": os.path.basename(files[index])})
-
 @app.route("/search", methods=["POST"])
 def search_youtube():
     data   = request.get_json()
     secret = data.get("secret", "")
     query  = data.get("query", "").strip()
+    page   = int(data.get("page", 0))
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
@@ -441,25 +430,21 @@ def search_youtube():
 
     try:
         import urllib.parse, urllib.request, json as json_lib
-        from xml.etree import ElementTree as ET
 
-        encoded = urllib.parse.quote(query)
+        encoded    = urllib.parse.quote(query)
         search_url = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAQ%253D%253D"
-        
-        req = urllib.request.Request(search_url, headers={
+
+        req  = urllib.request.Request(search_url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
         html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
 
-        # Extract video data from YouTube's initial data
-        import re
         match = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
         if not match:
             return jsonify({"error": "Could not parse YouTube results"}), 404
 
         data_json = json_lib.loads(match.group(1))
-        
-        contents = (data_json
+        contents  = (data_json
             .get("contents", {})
             .get("twoColumnSearchResultsRenderer", {})
             .get("primaryContents", {})
@@ -468,7 +453,7 @@ def search_youtube():
             .get("itemSectionRenderer", {})
             .get("contents", []))
 
-        results = []
+        all_results = []
         for item in contents:
             vr = item.get("videoRenderer", {})
             if not vr:
@@ -480,9 +465,8 @@ def search_youtube():
             date     = vr.get("publishedTimeText", {}).get("simpleText", "")
             thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
             thumb    = thumbs[-1].get("url", "") if thumbs else ""
-
             if vid_id and title:
-                results.append({
+                all_results.append({
                     "id":        vid_id,
                     "url":       f"https://www.youtube.com/watch?v={vid_id}",
                     "title":     title,
@@ -491,13 +475,17 @@ def search_youtube():
                     "date":      date,
                     "thumbnail": thumb
                 })
-            if len(results) >= 8:
-                break
 
-        if not results:
+        page_size    = 8
+        start        = page * page_size
+        end          = start + page_size
+        page_results = all_results[start:end]
+        has_more     = len(all_results) > end
+
+        if not page_results:
             return jsonify({"error": "No results found"}), 404
 
-        return jsonify({"results": results})
+        return jsonify({"results": page_results, "has_more": has_more, "next_page": page + 1})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
