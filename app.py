@@ -623,7 +623,29 @@ def debug_search():
         return jsonify({"item_types": types, "channels_found": channels})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-                    
+
+@app.route("/debug_channel", methods=["POST"])
+def debug_channel():
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        import urllib.request
+        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        url      = "https://www.youtube.com/@yisroelgreen/videos?view=0&sort=dd&flow=grid"
+        req      = urllib.request.Request(url, headers=headers)
+        html     = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+        match    = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
+        if not match:
+            return jsonify({"error": "no ytInitialData found", "html_preview": html[:500]})
+        import json as j2
+        data_j = j2.loads(match.group(1))
+        keys   = list(data_j.get("contents", {}).keys())
+        return jsonify({"top_keys": keys, "html_length": len(html)})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+                            
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
