@@ -487,8 +487,12 @@ def search_youtube():
             ch_title  = cr.get("title", {}).get("simpleText", "").lower()
             handle    = cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", "")
             ch_id     = cr.get("channelId", "")
-            # Check if channel name matches query
-            if query.lower() in ch_title or ch_title in query.lower():
+
+            # Match if query words are all found in channel title
+            query_words = query.lower().split()
+            title_words = ch_title.split()
+            matches = sum(1 for w in query_words if any(w in t for t in title_words))
+            if matches >= len(query_words) or ch_title in query.lower() or query.lower() in ch_title:
                 if handle:
                     ch_url = f"https://www.youtube.com{handle}/videos?view=0&sort=dd&flow=grid"
                 elif ch_id:
