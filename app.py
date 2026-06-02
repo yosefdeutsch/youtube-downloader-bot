@@ -491,7 +491,7 @@ def search_youtube():
                     "date":      date,
                     "thumbnail": thumb
                 })
-            if len(results) >= 5:
+            if len(results) >= 8:
                 break
 
         if not results:
