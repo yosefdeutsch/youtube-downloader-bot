@@ -417,7 +417,7 @@ def search_youtube():
                 title    = vr.get("title", {}).get("runs", [{}])[0].get("text", "")
                 channel  = vr.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
                 duration = vr.get("lengthText", {}).get("simpleText", "")
-                date     = vr.get("publishedTimeText", {}).get("simpleText", "")
+                date     = vr.get("publishedTimeText", {}).get("simpleText", "") or vr.get("upcomingEventData", {}).get("startTime", "") or "—"
                 thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
                 thumb    = thumbs[-1].get("url", "") if thumbs else ""
                 if vid_id and title:
@@ -482,14 +482,18 @@ def search_youtube():
                         if rich_grid:
                             items = rich_grid.get("contents", [])
                             for it in items:
+                                # Skip non-video items like continuations
+                                if "richItemRenderer" not in it:
+                                    continue
                                 rv = it.get("richItemRenderer", {}).get("content", {}).get("videoRenderer", {})
                                 if not rv:
                                     continue
                                 vid_id   = rv.get("videoId", "")
                                 title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
-                                channel  = rv.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
-                                duration = rv.get("lengthText", {}).get("simpleText", "")
-                                date     = rv.get("publishedTimeText", {}).get("simpleText", "")
+                                # Channel name from channel page is the channel itself
+                                ch_name  = cr.get("title", {}).get("simpleText", "") or cr.get("title", {}).get("runs", [{}])[0].get("text", "")
+                                duration = rv.get("lengthText", {}).get("simpleText", "") or rv.get("thumbnailOverlays", [{}])[0].get("thumbnailOverlayTimeStatusRenderer", {}).get("text", {}).get("simpleText", "")
+                                date     = rv.get("publishedTimeText", {}).get("simpleText", "") or rv.get("upcomingEventData", {}).get("startTime", "") or "—"
                                 thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
                                 thumb    = thumbs[-1].get("url", "") if thumbs else ""
                                 if vid_id and title:
@@ -497,7 +501,7 @@ def search_youtube():
                                         "id":        vid_id,
                                         "url":       f"https://www.youtube.com/watch?v={vid_id}",
                                         "title":     title,
-                                        "channel":   channel,
+                                        "channel":   ch_name,
                                         "duration":  duration,
                                         "date":      date,
                                         "thumbnail": thumb
