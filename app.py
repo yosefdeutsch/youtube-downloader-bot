@@ -430,68 +430,77 @@ def get_filename(job_id, index):
 
 @app.route("/search", methods=["POST"])
 def search_youtube():
-    data            = request.get_json()
-    secret          = data.get("secret", "")
-    query           = data.get("query", "").strip()
-    cookies_content = data.get("cookies_content", "")
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    query  = data.get("query", "").strip()
 
     if secret != API_SECRET:
         return jsonify({"error": "Unauthorized"}), 401
     if not query:
         return jsonify({"error": "query is required"}), 400
 
-    work_dir = "/tmp/search"
-    os.makedirs(work_dir, exist_ok=True)
+    try:
+        import urllib.parse, urllib.request, json as json_lib
+        from xml.etree import ElementTree as ET
 
-    cookies_path = None
-    if cookies_content:
-        cookies_path = f"{work_dir}/cookies.txt"
-        with open(cookies_path, "w") as f:
-            f.write(cookies_content)
+        encoded = urllib.parse.quote(query)
+        search_url = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAQ%253D%253D"
+        
+        req = urllib.request.Request(search_url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
 
-    cmd = [
-        "yt-dlp",
-        "--no-warnings",
-        "--skip-download",
-        "--print", "%(id)s\t%(title)s\t%(channel)s\t%(duration_string)s\t%(upload_date)s\t%(thumbnail)s",
-        "--playlist-end", "5",
-        "--remote-components", "ejs:github",
-        "--proxy", PROXY_URL,
-        f"ytsearch5:{query}"
-    ]
-    if cookies_path:
-        cmd += ["--cookies", cookies_path]
+        # Extract video data from YouTube's initial data
+        import re
+        match = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
+        if not match:
+            return jsonify({"error": "Could not parse YouTube results"}), 404
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        data_json = json_lib.loads(match.group(1))
+        
+        contents = (data_json
+            .get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [{}])[0]
+            .get("itemSectionRenderer", {})
+            .get("contents", []))
 
-    results = []
-    for line in result.stdout.strip().splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 6:
-            vid_id    = parts[0].strip()
-            title     = parts[1].strip()
-            channel   = parts[2].strip()
-            duration  = parts[3].strip()
-            date      = parts[4].strip()
-            thumbnail = parts[5].strip()
+        results = []
+        for item in contents:
+            vr = item.get("videoRenderer", {})
+            if not vr:
+                continue
+            vid_id   = vr.get("videoId", "")
+            title    = vr.get("title", {}).get("runs", [{}])[0].get("text", "")
+            channel  = vr.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
+            duration = vr.get("lengthText", {}).get("simpleText", "")
+            date     = vr.get("publishedTimeText", {}).get("simpleText", "")
+            thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
+            thumb    = thumbs[-1].get("url", "") if thumbs else ""
 
-            if len(date) == 8:
-                date = f"{date[6:8]}/{date[4:6]}/{date[0:4]}"
+            if vid_id and title:
+                results.append({
+                    "id":        vid_id,
+                    "url":       f"https://www.youtube.com/watch?v={vid_id}",
+                    "title":     title,
+                    "channel":   channel,
+                    "duration":  duration,
+                    "date":      date,
+                    "thumbnail": thumb
+                })
+            if len(results) >= 5:
+                break
 
-            results.append({
-                "id":        vid_id,
-                "url":       f"https://www.youtube.com/watch?v={vid_id}",
-                "title":     title,
-                "channel":   channel,
-                "duration":  duration,
-                "date":      date,
-                "thumbnail": thumbnail
-            })
+        if not results:
+            return jsonify({"error": "No results found"}), 404
 
-    if not results:
-        return jsonify({"error": "No results found", "stderr": result.stderr[-300:]}), 404
+        return jsonify({"results": results})
 
-    return jsonify({"results": results})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
             
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
