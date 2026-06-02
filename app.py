@@ -435,9 +435,12 @@ def search_youtube():
         def get_channel_videos(channel_url):
             videos = []
             try:
-                html     = fetch_url(channel_url)
-                data_j   = parse_initial_data(html)
-                tabs     = data_j.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
+                html   = fetch_url(channel_url)
+                data_j = parse_initial_data(html)
+
+                # Try multiple possible structures
+                # Structure 1: twoColumnBrowseResultsRenderer > tabs
+                tabs = data_j.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
                 for tab in tabs:
                     content   = tab.get("tabRenderer", {}).get("content", {})
                     rich_grid = content.get("richGridRenderer", {})
@@ -445,11 +448,12 @@ def search_youtube():
                         for it in rich_grid.get("contents", []):
                             if "richItemRenderer" not in it:
                                 continue
-                            rv       = it["richItemRenderer"].get("content", {}).get("videoRenderer", {})
+                            rv = it["richItemRenderer"].get("content", {}).get("videoRenderer", {})
+                            if not rv:
+                                continue
                             vid_id   = rv.get("videoId", "")
                             title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
-                            duration = rv.get("lengthText", {}).get("simpleText", "") or \
-                                       rv.get("thumbnailOverlays", [{}])[0].get("thumbnailOverlayTimeStatusRenderer", {}).get("text", {}).get("simpleText", "")
+                            duration = rv.get("lengthText", {}).get("simpleText", "")
                             date     = rv.get("publishedTimeText", {}).get("simpleText", "") or "—"
                             thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
                             thumb    = thumbs[-1].get("url", "") if thumbs else ""
@@ -460,9 +464,47 @@ def search_youtube():
                                     "title": title, "channel": ch_name,
                                     "duration": duration, "date": date, "thumbnail": thumb
                                 })
-                        break
-            except Exception:
-                pass
+                        if videos:
+                            break
+
+                # Structure 2: search all videoRenderer in entire data if structure 1 failed
+                if not videos:
+                    raw = str(data_j)
+                    # Use regex to find all videoIds
+                    import json as j2
+                    def find_video_renderers(obj):
+                        found = []
+                        if isinstance(obj, dict):
+                            if "videoId" in obj and "title" in obj:
+                                vid_id = obj.get("videoId", "")
+                                title  = obj.get("title", {}).get("runs", [{}])[0].get("text", "") if isinstance(obj.get("title"), dict) else ""
+                                if vid_id and title:
+                                    duration = obj.get("lengthText", {}).get("simpleText", "")
+                                    date     = obj.get("publishedTimeText", {}).get("simpleText", "") or "—"
+                                    thumbs   = obj.get("thumbnail", {}).get("thumbnails", [])
+                                    thumb    = thumbs[-1].get("url", "") if thumbs else ""
+                                    found.append({
+                                        "id": vid_id, "url": f"https://www.youtube.com/watch?v={vid_id}",
+                                        "title": title, "channel": "",
+                                        "duration": duration, "date": date, "thumbnail": thumb
+                                    })
+                            for v in obj.values():
+                                found.extend(find_video_renderers(v))
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                found.extend(find_video_renderers(item))
+                        return found
+
+                    all_found = find_video_renderers(data_j)
+                    # Deduplicate by id
+                    seen = set()
+                    for v in all_found:
+                        if v["id"] not in seen and v["title"]:
+                            seen.add(v["id"])
+                            videos.append(v)
+
+            except Exception as ex:
+                videos = [{"error": str(ex)}]
             return videos
 
         # Step 1 — Search for channels with this query
