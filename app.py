@@ -427,7 +427,73 @@ def get_filename(job_id, index):
     if index >= len(files):
         return jsonify({"error": "Not found"}), 404
     return jsonify({"filename": os.path.basename(files[index])})
-        
+
+@app.route("/search", methods=["POST"])
+def search_youtube():
+    data            = request.get_json()
+    secret          = data.get("secret", "")
+    query           = data.get("query", "").strip()
+    cookies_content = data.get("cookies_content", "")
+
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+
+    work_dir = "/tmp/search"
+    os.makedirs(work_dir, exist_ok=True)
+
+    cookies_path = None
+    if cookies_content:
+        cookies_path = f"{work_dir}/cookies.txt"
+        with open(cookies_path, "w") as f:
+            f.write(cookies_content)
+
+    cmd = [
+        "yt-dlp",
+        "--no-warnings",
+        "--skip-download",
+        "--print", "%(id)s\t%(title)s\t%(channel)s\t%(duration_string)s\t%(upload_date)s\t%(thumbnail)s",
+        "--playlist-end", "5",
+        "--extractor-args", "youtube:player_client=web",
+        "--remote-components", "ejs:github",
+        "--proxy", PROXY_URL,
+        f"ytsearch5:{query}"
+    ]
+    if cookies_path:
+        cmd += ["--cookies", cookies_path]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+    results = []
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 6:
+            vid_id    = parts[0].strip()
+            title     = parts[1].strip()
+            channel   = parts[2].strip()
+            duration  = parts[3].strip()
+            date      = parts[4].strip()
+            thumbnail = parts[5].strip()
+
+            if len(date) == 8:
+                date = f"{date[6:8]}/{date[4:6]}/{date[0:4]}"
+
+            results.append({
+                "id":        vid_id,
+                "url":       f"https://www.youtube.com/watch?v={vid_id}",
+                "title":     title,
+                "channel":   channel,
+                "duration":  duration,
+                "date":      date,
+                "thumbnail": thumbnail
+            })
+
+    if not results:
+        return jsonify({"error": "No results found", "stderr": result.stderr[-300:]}), 404
+
+    return jsonify({"results": results})
+            
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
