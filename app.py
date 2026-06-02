@@ -386,36 +386,6 @@ def check_formats():
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return jsonify({"stdout": result.stdout[-3000:], "stderr": result.stderr[-1000:]})
 
-@app.route("/debug/<job_id>")
-def debug_job(job_id):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    work_dir = f"/tmp/{job_id}"
-    job = jobs.get(job_id)
-    try:
-        files = os.listdir(work_dir)
-        sizes = {f: os.path.getsize(os.path.join(work_dir, f)) for f in files}
-    except:
-        files = ["FOLDER NOT FOUND"]
-        sizes = {}
-    return jsonify({
-        "job":        job,
-        "files":      files,
-        "sizes_mb":   {k: round(v/1024/1024, 2) for k,v in sizes.items()}
-    })
-
-@app.route("/part_ready/<job_id>/<int:index>")
-def part_ready(job_id, index):
-    if request.args.get("secret") != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    job = jobs.get(job_id)
-    if not job:
-        return jsonify({"ready": False, "status": "not_found"})
-    files = job.get("file_paths", [])
-    if index < len(files) and os.path.exists(files[index]):
-        return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
-    return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
-
 @app.route("/search", methods=["POST"])
 def search_youtube():
     data   = request.get_json()
@@ -431,13 +401,41 @@ def search_youtube():
     try:
         import urllib.parse, urllib.request, json as json_lib
 
-        encoded    = urllib.parse.quote(query)
-        search_url = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAQ%253D%253D"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-        req  = urllib.request.Request(search_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        })
-        html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+        def fetch_url(url):
+            req  = urllib.request.Request(url, headers=headers)
+            return urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+
+        def parse_videos_from_contents(contents):
+            results = []
+            for item in contents:
+                vr = item.get("videoRenderer", {})
+                if not vr:
+                    continue
+                vid_id   = vr.get("videoId", "")
+                title    = vr.get("title", {}).get("runs", [{}])[0].get("text", "")
+                channel  = vr.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
+                duration = vr.get("lengthText", {}).get("simpleText", "")
+                date     = vr.get("publishedTimeText", {}).get("simpleText", "")
+                thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
+                thumb    = thumbs[-1].get("url", "") if thumbs else ""
+                if vid_id and title:
+                    results.append({
+                        "id":        vid_id,
+                        "url":       f"https://www.youtube.com/watch?v={vid_id}",
+                        "title":     title,
+                        "channel":   channel,
+                        "duration":  duration,
+                        "date":      date,
+                        "thumbnail": thumb
+                    })
+            return results
+
+        # Step 1 — Search YouTube
+        encoded    = urllib.parse.quote(query)
+        search_url = f"https://www.youtube.com/results?search_query={encoded}"
+        html       = fetch_url(search_url)
 
         match = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
         if not match:
@@ -453,29 +451,70 @@ def search_youtube():
             .get("itemSectionRenderer", {})
             .get("contents", []))
 
-        all_results = []
-        for item in contents:
-            vr = item.get("videoRenderer", {})
-            if not vr:
-                continue
-            vid_id   = vr.get("videoId", "")
-            title    = vr.get("title", {}).get("runs", [{}])[0].get("text", "")
-            channel  = vr.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
-            duration = vr.get("lengthText", {}).get("simpleText", "")
-            date     = vr.get("publishedTimeText", {}).get("simpleText", "")
-            thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
-            thumb    = thumbs[-1].get("url", "") if thumbs else ""
-            if vid_id and title:
-                all_results.append({
-                    "id":        vid_id,
-                    "url":       f"https://www.youtube.com/watch?v={vid_id}",
-                    "title":     title,
-                    "channel":   channel,
-                    "duration":  duration,
-                    "date":      date,
-                    "thumbnail": thumb
-                })
+        # Step 2 — Check if a channel card exists in results
+        channel_videos = []
+        channel_url    = None
 
+        for item in contents:
+            cr = item.get("channelRenderer", {})
+            if cr:
+                # Found a channel — get its URL
+                channel_id  = cr.get("channelId", "")
+                channel_handle = cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", "")
+                if channel_handle:
+                    channel_url = f"https://www.youtube.com{channel_handle}/videos?view=0&sort=dd&flow=grid"
+                elif channel_id:
+                    channel_url = f"https://www.youtube.com/channel/{channel_id}/videos?view=0&sort=dd&flow=grid"
+                break
+
+        # Step 3 — If channel found, fetch its videos sorted by newest
+        if channel_url:
+            try:
+                channel_html  = fetch_url(channel_url)
+                ch_match      = re.search(r'var ytInitialData = ({.*?});</script>', channel_html, re.DOTALL)
+                if ch_match:
+                    ch_data    = json_lib.loads(ch_match.group(1))
+                    # Navigate to video grid
+                    tabs       = ch_data.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
+                    for tab in tabs:
+                        tab_content = tab.get("tabRenderer", {}).get("content", {})
+                        rich_grid   = tab_content.get("richGridRenderer", {})
+                        if rich_grid:
+                            items = rich_grid.get("contents", [])
+                            for it in items:
+                                rv = it.get("richItemRenderer", {}).get("content", {}).get("videoRenderer", {})
+                                if not rv:
+                                    continue
+                                vid_id   = rv.get("videoId", "")
+                                title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
+                                channel  = rv.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
+                                duration = rv.get("lengthText", {}).get("simpleText", "")
+                                date     = rv.get("publishedTimeText", {}).get("simpleText", "")
+                                thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
+                                thumb    = thumbs[-1].get("url", "") if thumbs else ""
+                                if vid_id and title:
+                                    channel_videos.append({
+                                        "id":        vid_id,
+                                        "url":       f"https://www.youtube.com/watch?v={vid_id}",
+                                        "title":     title,
+                                        "channel":   channel,
+                                        "duration":  duration,
+                                        "date":      date,
+                                        "thumbnail": thumb
+                                    })
+                            break
+            except Exception:
+                pass  # Channel fetch failed, continue with regular results
+
+        # Step 4 — Get regular search results
+        regular_videos = parse_videos_from_contents(contents)
+
+        # Step 5 — Combine: channel videos first, then regular (deduplicated)
+        channel_ids  = {v["id"] for v in channel_videos}
+        regular_only = [v for v in regular_videos if v["id"] not in channel_ids]
+        all_results  = channel_videos + regular_only
+
+        # Pagination
         page_size    = 8
         start        = page * page_size
         end          = start + page_size
