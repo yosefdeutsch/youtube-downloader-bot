@@ -455,7 +455,6 @@ def search_youtube():
         "--skip-download",
         "--print", "%(id)s\t%(title)s\t%(channel)s\t%(duration_string)s\t%(upload_date)s\t%(thumbnail)s",
         "--playlist-end", "5",
-        "--extractor-args", "youtube:player_client=web",
         "--remote-components", "ejs:github",
         "--proxy", PROXY_URL,
         f"ytsearch5:{query}"
