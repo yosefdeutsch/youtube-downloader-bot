@@ -404,8 +404,12 @@ def search_youtube():
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
         def fetch_url(url):
-            req  = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(url, headers=headers)
             return urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
+
+        def parse_initial_data(html):
+            m = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
+            return json_lib.loads(m.group(1)) if m else {}
 
         def parse_videos_from_contents(contents):
             results = []
@@ -417,33 +421,56 @@ def search_youtube():
                 title    = vr.get("title", {}).get("runs", [{}])[0].get("text", "")
                 channel  = vr.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
                 duration = vr.get("lengthText", {}).get("simpleText", "")
-                date     = vr.get("publishedTimeText", {}).get("simpleText", "") or vr.get("upcomingEventData", {}).get("startTime", "") or "—"
+                date     = vr.get("publishedTimeText", {}).get("simpleText", "") or "—"
                 thumbs   = vr.get("thumbnail", {}).get("thumbnails", [])
                 thumb    = thumbs[-1].get("url", "") if thumbs else ""
                 if vid_id and title:
                     results.append({
-                        "id":        vid_id,
-                        "url":       f"https://www.youtube.com/watch?v={vid_id}",
-                        "title":     title,
-                        "channel":   channel,
-                        "duration":  duration,
-                        "date":      date,
-                        "thumbnail": thumb
+                        "id": vid_id, "url": f"https://www.youtube.com/watch?v={vid_id}",
+                        "title": title, "channel": channel,
+                        "duration": duration, "date": date, "thumbnail": thumb
                     })
             return results
 
-        # Step 1 — Search YouTube
-        encoded    = urllib.parse.quote(query)
-        search_url = f"https://www.youtube.com/results?search_query={encoded}"
-        html       = fetch_url(search_url)
+        def get_channel_videos(channel_url):
+            videos = []
+            try:
+                html     = fetch_url(channel_url)
+                data_j   = parse_initial_data(html)
+                tabs     = data_j.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
+                for tab in tabs:
+                    content   = tab.get("tabRenderer", {}).get("content", {})
+                    rich_grid = content.get("richGridRenderer", {})
+                    if rich_grid:
+                        for it in rich_grid.get("contents", []):
+                            if "richItemRenderer" not in it:
+                                continue
+                            rv       = it["richItemRenderer"].get("content", {}).get("videoRenderer", {})
+                            vid_id   = rv.get("videoId", "")
+                            title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
+                            duration = rv.get("lengthText", {}).get("simpleText", "") or \
+                                       rv.get("thumbnailOverlays", [{}])[0].get("thumbnailOverlayTimeStatusRenderer", {}).get("text", {}).get("simpleText", "")
+                            date     = rv.get("publishedTimeText", {}).get("simpleText", "") or "—"
+                            thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
+                            thumb    = thumbs[-1].get("url", "") if thumbs else ""
+                            ch_name  = rv.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
+                            if vid_id and title:
+                                videos.append({
+                                    "id": vid_id, "url": f"https://www.youtube.com/watch?v={vid_id}",
+                                    "title": title, "channel": ch_name,
+                                    "duration": duration, "date": date, "thumbnail": thumb
+                                })
+                        break
+            except Exception:
+                pass
+            return videos
 
-        match = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
-        if not match:
-            return jsonify({"error": "Could not parse YouTube results"}), 404
-
-        data_json = json_lib.loads(match.group(1))
-        contents  = (data_json
-            .get("contents", {})
+        # Step 1 — Search for channels with this query
+        encoded      = urllib.parse.quote(query)
+        channel_search_url = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAg%3D%3D"  # filter: channels only
+        ch_html      = fetch_url(channel_search_url)
+        ch_data      = parse_initial_data(ch_html)
+        ch_contents  = (ch_data.get("contents", {})
             .get("twoColumnSearchResultsRenderer", {})
             .get("primaryContents", {})
             .get("sectionListRenderer", {})
@@ -451,69 +478,40 @@ def search_youtube():
             .get("itemSectionRenderer", {})
             .get("contents", []))
 
-        # Step 2 — Check if a channel card exists in results
+        # Step 2 — Find best matching channel
         channel_videos = []
-        channel_url    = None
-
-        for item in contents:
+        for item in ch_contents:
             cr = item.get("channelRenderer", {})
-            if cr:
-                # Found a channel — get its URL
-                channel_id  = cr.get("channelId", "")
-                channel_handle = cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", "")
-                if channel_handle:
-                    channel_url = f"https://www.youtube.com{channel_handle}/videos?view=0&sort=dd&flow=grid"
-                elif channel_id:
-                    channel_url = f"https://www.youtube.com/channel/{channel_id}/videos?view=0&sort=dd&flow=grid"
+            if not cr:
+                continue
+            ch_title  = cr.get("title", {}).get("simpleText", "").lower()
+            handle    = cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", "")
+            ch_id     = cr.get("channelId", "")
+            # Check if channel name matches query
+            if query.lower() in ch_title or ch_title in query.lower():
+                if handle:
+                    ch_url = f"https://www.youtube.com{handle}/videos?view=0&sort=dd&flow=grid"
+                elif ch_id:
+                    ch_url = f"https://www.youtube.com/channel/{ch_id}/videos?view=0&sort=dd&flow=grid"
+                else:
+                    continue
+                channel_videos = get_channel_videos(ch_url)
                 break
 
-        # Step 3 — If channel found, fetch its videos sorted by newest
-        if channel_url:
-            try:
-                channel_html  = fetch_url(channel_url)
-                ch_match      = re.search(r'var ytInitialData = ({.*?});</script>', channel_html, re.DOTALL)
-                if ch_match:
-                    ch_data    = json_lib.loads(ch_match.group(1))
-                    # Navigate to video grid
-                    tabs       = ch_data.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
-                    for tab in tabs:
-                        tab_content = tab.get("tabRenderer", {}).get("content", {})
-                        rich_grid   = tab_content.get("richGridRenderer", {})
-                        if rich_grid:
-                            items = rich_grid.get("contents", [])
-                            for it in items:
-                                # Skip non-video items like continuations
-                                if "richItemRenderer" not in it:
-                                    continue
-                                rv = it.get("richItemRenderer", {}).get("content", {}).get("videoRenderer", {})
-                                if not rv:
-                                    continue
-                                vid_id   = rv.get("videoId", "")
-                                title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
-                                # Channel name from channel page is the channel itself
-                                ch_name  = cr.get("title", {}).get("simpleText", "") or cr.get("title", {}).get("runs", [{}])[0].get("text", "")
-                                duration = rv.get("lengthText", {}).get("simpleText", "") or rv.get("thumbnailOverlays", [{}])[0].get("thumbnailOverlayTimeStatusRenderer", {}).get("text", {}).get("simpleText", "")
-                                date     = rv.get("publishedTimeText", {}).get("simpleText", "") or rv.get("upcomingEventData", {}).get("startTime", "") or "—"
-                                thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
-                                thumb    = thumbs[-1].get("url", "") if thumbs else ""
-                                if vid_id and title:
-                                    channel_videos.append({
-                                        "id":        vid_id,
-                                        "url":       f"https://www.youtube.com/watch?v={vid_id}",
-                                        "title":     title,
-                                        "channel":   ch_name,
-                                        "duration":  duration,
-                                        "date":      date,
-                                        "thumbnail": thumb
-                                    })
-                            break
-            except Exception:
-                pass  # Channel fetch failed, continue with regular results
+        # Step 3 — Regular video search
+        video_search_url = f"https://www.youtube.com/results?search_query={encoded}"
+        vid_html         = fetch_url(video_search_url)
+        vid_data         = parse_initial_data(vid_html)
+        vid_contents     = (vid_data.get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [{}])[0]
+            .get("itemSectionRenderer", {})
+            .get("contents", []))
+        regular_videos = parse_videos_from_contents(vid_contents)
 
-        # Step 4 — Get regular search results
-        regular_videos = parse_videos_from_contents(contents)
-
-        # Step 5 — Combine: channel videos first, then regular (deduplicated)
+        # Step 4 — Combine: channel videos first, deduplicated
         channel_ids  = {v["id"] for v in channel_videos}
         regular_only = [v for v in regular_videos if v["id"] not in channel_ids]
         all_results  = channel_videos + regular_only
