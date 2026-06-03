@@ -432,79 +432,45 @@ def search_youtube():
                     })
             return results
 
-        def get_channel_videos(channel_url):
+        def get_channel_videos(channel_id, channel_name):
             videos = []
             try:
-                html   = fetch_url(channel_url)
-                data_j = parse_initial_data(html)
+                import urllib.request
+                # YouTube RSS feed — no JavaScript needed, always works
+                rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+                req     = urllib.request.Request(rss_url, headers=headers)
+                rss     = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
 
-                # Try multiple possible structures
-                # Structure 1: twoColumnBrowseResultsRenderer > tabs
-                tabs = data_j.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
-                for tab in tabs:
-                    content   = tab.get("tabRenderer", {}).get("content", {})
-                    rich_grid = content.get("richGridRenderer", {})
-                    if rich_grid:
-                        for it in rich_grid.get("contents", []):
-                            if "richItemRenderer" not in it:
-                                continue
-                            rv = it["richItemRenderer"].get("content", {}).get("videoRenderer", {})
-                            if not rv:
-                                continue
-                            vid_id   = rv.get("videoId", "")
-                            title    = rv.get("title", {}).get("runs", [{}])[0].get("text", "")
-                            duration = rv.get("lengthText", {}).get("simpleText", "")
-                            date     = rv.get("publishedTimeText", {}).get("simpleText", "") or "—"
-                            thumbs   = rv.get("thumbnail", {}).get("thumbnails", [])
-                            thumb    = thumbs[-1].get("url", "") if thumbs else ""
-                            ch_name  = rv.get("ownerText", {}).get("runs", [{}])[0].get("text", "")
-                            if vid_id and title:
-                                videos.append({
-                                    "id": vid_id, "url": f"https://www.youtube.com/watch?v={vid_id}",
-                                    "title": title, "channel": ch_name,
-                                    "duration": duration, "date": date, "thumbnail": thumb
-                                })
-                        if videos:
-                            break
+                from xml.etree import ElementTree as ET
+                ns  = {"yt": "http://www.youtube.com/xml/schemas/2015",
+                       "media": "http://search.yahoo.com/mrss/",
+                       "atom": "http://www.w3.org/2005/Atom"}
+                root = ET.fromstring(rss)
 
-                # Structure 2: search all videoRenderer in entire data if structure 1 failed
-                if not videos:
-                    raw = str(data_j)
-                    # Use regex to find all videoIds
-                    import json as j2
-                    def find_video_renderers(obj):
-                        found = []
-                        if isinstance(obj, dict):
-                            if "videoId" in obj and "title" in obj:
-                                vid_id = obj.get("videoId", "")
-                                title  = obj.get("title", {}).get("runs", [{}])[0].get("text", "") if isinstance(obj.get("title"), dict) else ""
-                                if vid_id and title:
-                                    duration = obj.get("lengthText", {}).get("simpleText", "")
-                                    date     = obj.get("publishedTimeText", {}).get("simpleText", "") or "—"
-                                    thumbs   = obj.get("thumbnail", {}).get("thumbnails", [])
-                                    thumb    = thumbs[-1].get("url", "") if thumbs else ""
-                                    found.append({
-                                        "id": vid_id, "url": f"https://www.youtube.com/watch?v={vid_id}",
-                                        "title": title, "channel": "",
-                                        "duration": duration, "date": date, "thumbnail": thumb
-                                    })
-                            for v in obj.values():
-                                found.extend(find_video_renderers(v))
-                        elif isinstance(obj, list):
-                            for item in obj:
-                                found.extend(find_video_renderers(item))
-                        return found
+                for entry in root.findall("atom:entry", ns):
+                    vid_id   = entry.find("yt:videoId", ns)
+                    title    = entry.find("atom:title", ns)
+                    published = entry.find("atom:published", ns)
+                    thumb_el = entry.find("media:group/media:thumbnail", ns)
+                    duration_el = entry.find("media:group/media:content", ns)
 
-                    all_found = find_video_renderers(data_j)
-                    # Deduplicate by id
-                    seen = set()
-                    for v in all_found:
-                        if v["id"] not in seen and v["title"]:
-                            seen.add(v["id"])
-                            videos.append(v)
+                    vid_id   = vid_id.text   if vid_id   else ""
+                    title    = title.text    if title    else ""
+                    date     = published.text[:10] if published else "—"
+                    thumb    = thumb_el.get("url", "") if thumb_el is not None else ""
 
+                    if vid_id and title:
+                        videos.append({
+                            "id":        vid_id,
+                            "url":       f"https://www.youtube.com/watch?v={vid_id}",
+                            "title":     title,
+                            "channel":   channel_name,
+                            "duration":  "",
+                            "date":      date,
+                            "thumbnail": thumb
+                        })
             except Exception as ex:
-                videos = [{"error": str(ex)}]
+                pass
             return videos
 
         # Step 1 — Search for channels with this query
@@ -541,7 +507,9 @@ def search_youtube():
                     ch_url = f"https://www.youtube.com/channel/{ch_id}/videos?view=0&sort=dd&flow=grid"
                 else:
                     continue
-                channel_videos = get_channel_videos(ch_url)
+                ch_id          = cr.get("channelId", "")
+                ch_name        = cr.get("title", {}).get("simpleText", "")
+                channel_videos = get_channel_videos(ch_id, ch_name)
                 # Debug: store channel info
                 ch_debug = {"url": ch_url, "videos_found": len(channel_videos)}
                 break
