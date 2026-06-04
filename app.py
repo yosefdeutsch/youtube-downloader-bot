@@ -106,7 +106,11 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                 update_job(job_id, "error", "❌ Could not extract file ID from Drive link.")
                 return
             file_id = file_id_match.group(1)
-            fname   = custom_name.replace(".mp4","") + ".mp4" if custom_name else f"{file_id}.mp4"
+            # Try to detect extension from custom name, default to mp4
+            if custom_name:
+                fname = custom_name if "." in custom_name else custom_name + ".mp4"
+            else:
+                fname = f"{file_id}.mp4"  # will be corrected after download if needed
             dl_path = os.path.join(work_dir, fname)
             update_job(job_id, "running", "Downloading from Google Drive…")
             try:
@@ -128,24 +132,43 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
                     if b"<html" in header.lower() or b"<!doc" in header.lower():
                         update_job(job_id, "error", f"❌ Google Drive blocked the download. Content: {header[:200]}")
                         return
+                # Detect real file type and fix extension if needed
+                with open(dl_path, "rb") as f:
+                    header = f.read(12)
+                real_ext = None
+                if header[:3] == b'ID3' or header[:2] == b'\xff\xfb' or header[:2] == b'\xff\xf3':
+                    real_ext = ".mp3"
+                elif header[4:8] == b'ftyp':
+                    real_ext = ".mp4"
+                if real_ext and not dl_path.endswith(real_ext):
+                    new_dl_path = os.path.splitext(dl_path)[0] + real_ext
+                    os.rename(dl_path, new_dl_path)
+                    dl_path = new_dl_path
+                    fname   = os.path.basename(dl_path)
                 downloaded = dl_path
-                # Convert to mp3 if audio only
+                # Convert to mp3 if audio only and not already mp3
+                downloaded = dl_path
+                # Convert to mp3 if audio only and not already mp3
                 if audio_only:
-                    update_job(job_id, "running", "Extracting audio to MP3…")
-                    mp3_name = os.path.splitext(fname)[0] + ".mp3"
-                    mp3_path = os.path.join(work_dir, mp3_name)
-                    mp3_cmd  = [
-                        "ffmpeg", "-i", dl_path,
-                        "-vn",
-                        "-acodec", "libmp3lame",
-                        "-q:a", "0",
-                        "-map_metadata", "0",
-                        mp3_path, "-y"
-                    ]
-                    result = subprocess.run(mp3_cmd, capture_output=True, timeout=600)
-                    if result.returncode == 0 and os.path.exists(mp3_path):
-                        os.remove(dl_path)
-                        downloaded = mp3_path
+                    if fname.lower().endswith(".mp3"):
+                        # Already MP3 — no conversion needed
+                        pass
+                    else:
+                        update_job(job_id, "running", "Extracting audio to MP3…")
+                        mp3_name = os.path.splitext(fname)[0] + ".mp3"
+                        mp3_path = os.path.join(work_dir, mp3_name)
+                        mp3_cmd  = [
+                            "ffmpeg", "-i", dl_path,
+                            "-vn",
+                            "-acodec", "libmp3lame",
+                            "-q:a", "0",
+                            "-map_metadata", "0",
+                            mp3_path, "-y"
+                        ]
+                        result = subprocess.run(mp3_cmd, capture_output=True, timeout=600)
+                        if result.returncode == 0 and os.path.exists(mp3_path):
+                            os.remove(dl_path)
+                            downloaded = mp3_path
             except Exception as ex:
                 update_job(job_id, "error", f"❌ Drive download failed: {str(ex)}")
                 return
