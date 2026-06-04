@@ -510,7 +510,6 @@ def search_youtube():
                 ch_name        = cr.get("title", {}).get("simpleText", "")
                 channel_videos = get_channel_videos(ch_id, ch_name)
                 # Debug: store channel info
-                ch_debug = {"url": ch_url, "videos_found": len(channel_videos), "first_video": channel_videos[0] if channel_videos else "none", "ch_id": ch_id}
                 break
 
         # Step 3 — Regular video search
@@ -550,6 +549,18 @@ def search_youtube():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/filename/<job_id>/<int:index>")
+def get_filename(job_id, index):
+    if request.args.get("secret") != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
+    files = job.get("file_paths", [])
+    if index >= len(files):
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"filename": os.path.basename(files[index])})
+
 @app.route("/part_ready/<job_id>/<int:index>")
 def part_ready(job_id, index):
     if request.args.get("secret") != API_SECRET:
@@ -561,7 +572,7 @@ def part_ready(job_id, index):
     if index < len(files) and os.path.exists(files[index]):
         return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
     return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
-                                        
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
