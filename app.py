@@ -470,7 +470,7 @@ def search_youtube():
                             "thumbnail": thumb
                         })
             except Exception as ex:
-                pass
+                videos = [{"rss_error": str(ex)}]
             return videos
 
         # Step 1 — Search for channels with this query
@@ -511,7 +511,7 @@ def search_youtube():
                 ch_name        = cr.get("title", {}).get("simpleText", "")
                 channel_videos = get_channel_videos(ch_id, ch_name)
                 # Debug: store channel info
-                ch_debug = {"url": ch_url, "videos_found": len(channel_videos)}
+                ch_debug = {"url": ch_url, "videos_found": len(channel_videos), "first_video": channel_videos[0] if channel_videos else "none", "ch_id": ch_id}
                 break
 
         # Step 3 — Regular video search
