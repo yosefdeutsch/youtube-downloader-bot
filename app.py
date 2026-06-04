@@ -301,8 +301,9 @@ def run_download(job_id, url, cookies_content, format_id, custom_name, compress=
         # Always split if over 40MB
         file_size = os.path.getsize(downloaded)
         update_job(job_id, "running", f"File size: {file_size // (1024*1024)}MB. Preparing…")
-        # Don't split audio files
-        if not audio_only and file_size > 40 * 1024 * 1024:
+        # Split if over 40MB — always split video, split audio only if from Drive
+        is_drive = "drive.google.com" in url
+        if file_size > 40 * 1024 * 1024 and (not audio_only or is_drive):
             update_job(job_id, "running", "Splitting video into parts…")
             parts = split_video_file(downloaded, work_dir)
             if parts and len(parts) > 0:
