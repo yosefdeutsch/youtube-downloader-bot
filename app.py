@@ -479,8 +479,35 @@ def search_youtube():
 
                     vid_id = vid_id_el.text  if vid_id_el  is not None else ""
                     title  = title_el.text   if title_el   is not None else ""
-                    date   = pub_el.text[:10] if pub_el    is not None else "—"
                     thumb  = thumb_el.get("url", "") if thumb_el is not None else ""
+
+                    # Use higher quality thumbnail
+                    if vid_id:
+                        thumb = f"https://i.ytimg.com/vi/{vid_id}/hqdefault.jpg"
+
+                    # Format date as relative time
+                    date = "—"
+                    if pub_el is not None:
+                        import datetime
+                        try:
+                            pub_date = datetime.datetime.strptime(pub_el.text[:10], "%Y-%m-%d")
+                            now      = datetime.datetime.now()
+                            delta    = now - pub_date
+                            days     = delta.days
+                            if days == 0:
+                                date = "today"
+                            elif days == 1:
+                                date = "yesterday"
+                            elif days < 7:
+                                date = f"{days} days ago"
+                            elif days < 30:
+                                date = f"{days // 7} week{'s' if days // 7 > 1 else ''} ago"
+                            elif days < 365:
+                                date = f"{days // 30} month{'s' if days // 30 > 1 else ''} ago"
+                            else:
+                                date = f"{days // 365} year{'s' if days // 365 > 1 else ''} ago"
+                        except:
+                            date = pub_el.text[:10]
 
                     if vid_id and title:
                         videos.append({
