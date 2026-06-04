@@ -613,7 +613,23 @@ def debug_channel():
         return jsonify({"top_keys": keys, "html_length": len(html)})
     except Exception as e:
         return jsonify({"error": str(e)})
-                            
+
+@app.route("/debug_rss", methods=["POST"])
+def debug_rss():
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        import urllib.request
+        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        rss_url  = "https://www.youtube.com/feeds/videos.xml?channel_id=UCkBOrc9JttBDJS-QqT5cWag"
+        req      = urllib.request.Request(rss_url, headers=headers)
+        rss      = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
+        return jsonify({"length": len(rss), "preview": rss[:500]})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+                                    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
