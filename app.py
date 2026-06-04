@@ -442,22 +442,21 @@ def search_youtube():
                 rss     = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
 
                 from xml.etree import ElementTree as ET
-                ns  = {"yt": "http://www.youtube.com/xml/schemas/2015",
-                       "media": "http://search.yahoo.com/mrss/",
-                       "atom": "http://www.w3.org/2005/Atom"}
-                root = ET.fromstring(rss)
+                ATOM  = "http://www.w3.org/2005/Atom"
+                YT    = "http://www.youtube.com/xml/schemas/2015"
+                MEDIA = "http://search.yahoo.com/mrss/"
+                root  = ET.fromstring(rss)
 
-                for entry in root.findall("atom:entry", ns):
-                    vid_id   = entry.find("yt:videoId", ns)
-                    title    = entry.find("atom:title", ns)
-                    published = entry.find("atom:published", ns)
-                    thumb_el = entry.find("media:group/media:thumbnail", ns)
-                    duration_el = entry.find("media:group/media:content", ns)
+                for entry in root.findall(f"{{{ATOM}}}entry"):
+                    vid_id_el  = entry.find(f"{{{YT}}}videoId")
+                    title_el   = entry.find(f"{{{ATOM}}}title")
+                    pub_el     = entry.find(f"{{{ATOM}}}published")
+                    thumb_el   = entry.find(f"{{{MEDIA}}}group/{{{MEDIA}}}thumbnail")
 
-                    vid_id   = vid_id.text   if vid_id   else ""
-                    title    = title.text    if title    else ""
-                    date     = published.text[:10] if published else "—"
-                    thumb    = thumb_el.get("url", "") if thumb_el is not None else ""
+                    vid_id = vid_id_el.text  if vid_id_el  is not None else ""
+                    title  = title_el.text   if title_el   is not None else ""
+                    date   = pub_el.text[:10] if pub_el    is not None else "—"
+                    thumb  = thumb_el.get("url", "") if thumb_el is not None else ""
 
                     if vid_id and title:
                         videos.append({
