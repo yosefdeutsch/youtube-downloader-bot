@@ -469,7 +469,7 @@ def search_youtube():
                             "thumbnail": thumb
                         })
             except Exception as ex:
-                videos = [{"rss_error": str(ex)}]
+                pass
             return videos
 
         # Step 1 — Search for channels with this query
@@ -542,92 +542,13 @@ def search_youtube():
             return jsonify({"error": "No results found"}), 404
 
         return jsonify({
-            "results":      page_results,
-            "has_more":     has_more,
-            "next_page":    page + 1,
-            "channel_debug": ch_debug if 'ch_debug' in dir() else "no channel found"
+            "results":  page_results,
+            "has_more": has_more,
+            "next_page": page + 1
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route("/debug_search", methods=["POST"])
-def debug_search():
-    data   = request.get_json()
-    secret = data.get("secret", "")
-    query  = data.get("query", "").strip()
-    if secret != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    try:
-        import urllib.parse, urllib.request, json as json_lib
-        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        encoded  = urllib.parse.quote(query)
-        url      = f"https://www.youtube.com/results?search_query={encoded}&sp=EgIQAg%3D%3D"
-        req      = urllib.request.Request(url, headers=headers)
-        html     = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
-        match    = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
-        data_json = json_lib.loads(match.group(1))
-        contents = (data_json
-            .get("contents", {})
-            .get("twoColumnSearchResultsRenderer", {})
-            .get("primaryContents", {})
-            .get("sectionListRenderer", {})
-            .get("contents", [{}])[0]
-            .get("itemSectionRenderer", {})
-            .get("contents", []))
-        # Show what types of items we got
-        types = [list(item.keys()) for item in contents[:5]]
-        # Show first channelRenderer if any
-        channels = []
-        for item in contents:
-            cr = item.get("channelRenderer", {})
-            if cr:
-                channels.append({
-                    "title": cr.get("title", {}).get("simpleText", ""),
-                    "handle": cr.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("canonicalBaseUrl", ""),
-                    "id": cr.get("channelId", "")
-                })
-        return jsonify({"item_types": types, "channels_found": channels})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/debug_channel", methods=["POST"])
-def debug_channel():
-    data   = request.get_json()
-    secret = data.get("secret", "")
-    if secret != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    try:
-        import urllib.request
-        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        url      = "https://www.youtube.com/@yisroelgreen/videos?view=0&sort=dd&flow=grid"
-        req      = urllib.request.Request(url, headers=headers)
-        html     = urllib.request.urlopen(req, timeout=15).read().decode("utf-8")
-        match    = re.search(r'var ytInitialData = ({.*?});</script>', html, re.DOTALL)
-        if not match:
-            return jsonify({"error": "no ytInitialData found", "html_preview": html[:500]})
-        import json as j2
-        data_j = j2.loads(match.group(1))
-        keys   = list(data_j.get("contents", {}).keys())
-        return jsonify({"top_keys": keys, "html_length": len(html)})
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-@app.route("/debug_rss", methods=["POST"])
-def debug_rss():
-    data   = request.get_json()
-    secret = data.get("secret", "")
-    if secret != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
-    try:
-        import urllib.request
-        headers  = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        rss_url  = "https://www.youtube.com/feeds/videos.xml?channel_id=UCkBOrc9JttBDJS-QqT5cWag"
-        req      = urllib.request.Request(rss_url, headers=headers)
-        rss      = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
-        return jsonify({"length": len(rss), "preview": rss[:500]})
-    except Exception as e:
-        return jsonify({"error": str(e)})
                                     
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
