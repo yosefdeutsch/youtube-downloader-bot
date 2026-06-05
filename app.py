@@ -624,6 +624,21 @@ def part_ready(job_id, index):
         return jsonify({"ready": True, "total": len(files), "job_status": job["status"]})
     return jsonify({"ready": False, "total": len(files), "job_status": job["status"]})
 
+@app.route("/debug_proxy", methods=["POST"])
+def debug_proxy():
+    data   = request.get_json()
+    secret = data.get("secret", "")
+    if secret != API_SECRET:
+        return jsonify({"error": "Unauthorized"}), 401
+    import urllib.request
+    try:
+        proxy_handler = urllib.request.ProxyHandler({"http": PROXY_URL, "https": PROXY_URL})
+        opener = urllib.request.build_opener(proxy_handler)
+        result = opener.open("http://httpbin.org/ip", timeout=10).read().decode()
+        return jsonify({"proxy_url": PROXY_URL, "result": result})
+    except Exception as e:
+        return jsonify({"proxy_url": PROXY_URL, "error": str(e)})
+        
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
